@@ -1,4 +1,4 @@
-# slack-room-orchestrator 🐾
+﻿# slack-room-orchestrator 🐾
 
 택배와 소포가 함께 운영하는 Slack 기반 AI 회의실 오케스트레이터.
 
@@ -34,4 +34,4 @@
 ## 개발 원칙 원문 (에이전트 필독)
 - `JEWAN_DEV_CONSTITUTION.md`
 - `STANDARDS.md`
-- `ROOM_ENGINEERING_STANDARDS.md`
+- `SLACK_COMMAND_ENGINEERING_STANDARDS.md`

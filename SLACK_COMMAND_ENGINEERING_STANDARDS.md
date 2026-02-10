@@ -1,4 +1,4 @@
-# ROOM_ENGINEERING_STANDARDS.md
+# SLACK_COMMAND_ENGINEERING_STANDARDS.md
 
 > 목적: Slack 기반 아이디어 회의실 오케스트레이터 프로젝트의 개발 표준을 중앙화하여,
 > 확장성과 이식성을 유지하고 장기 운영 시 품질을 보장한다.
