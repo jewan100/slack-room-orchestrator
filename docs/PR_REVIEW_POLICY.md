@@ -1,0 +1,24 @@
+# PR_REVIEW_POLICY.md
+
+## 대상 레포
+- `jewan100/slack-room-orchestrator`
+
+## 리뷰 전략 (2단계)
+1. **1차 리뷰 (커밋/PR 단위): Copilot**
+   - 빠른 피드백, 규칙 위반 조기 발견
+   - PR 생성 즉시 리뷰 요청
+
+2. **2차 리뷰 (머지 직전 통합): Codex**
+   - 전체 변경의 구조/일관성/리스크 최종 점검
+   - 기능 간 충돌/누락/회귀 가능성 확인
+
+## 머지 조건
+- [ ] Copilot 리뷰 반영 완료
+- [ ] Codex 최종 리뷰 완료
+- [ ] CI(lint/typecheck/test) 통과
+- [ ] PR 본문(한글) 상세 작성 완료
+
+## 원칙
+- Blocking 이슈 존재 시 머지 금지
+- Non-blocking 이슈는 후속 이슈/작업으로 추적
+- 리뷰 결과는 PR 코멘트 및 결정 로그에 반영
