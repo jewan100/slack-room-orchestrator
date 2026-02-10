@@ -34,3 +34,4 @@
 ## 개발 원칙 원문 (에이전트 필독)
 - `JEWAN_DEV_CONSTITUTION.md`
 - `STANDARDS.md`
+- `ROOM_ENGINEERING_STANDARDS.md`
