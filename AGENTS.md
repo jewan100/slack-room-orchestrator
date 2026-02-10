@@ -92,6 +92,8 @@ PR 작성 시 `.github/PULL_REQUEST_TEMPLATE.md`를 따른다.
 ### 4.2 Codex 최종 리뷰 기준
 - `.github/codex-instructions.md` + `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md` 기준으로 판정
 - Verdict는 `PASS | CONDITIONAL | BLOCK` 중 하나로 명시
+- 최종 2차 검토 호출 코멘트는 아래 문구를 그대로 사용:
+  - `@codex 최종 2차 검토 요청. 기준: AGENTS.md, STANDARDS.md, .github/codex-instructions.md`
 
 ### 4.3 머지 조건
 - Blocking 이슈 없음
