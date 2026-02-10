@@ -29,7 +29,12 @@
 1. `JEWAN_DEV_CONSTITUTION.md`
 2. `STANDARDS.md`
 3. `SLACK_COMMAND_ENGINEERING_STANDARDS.md` (Slack command 도메인 작업 시)
-4. `.github/copilot-instructions.md`
+4. `AGENTS.md`
+5. `docs/reviewer/PR_REVIEW_POLICY.md`
+6. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md`
+7. `.github/copilot-instructions.md`
+8. `.github/codex-instructions.md`
+9. `.github/PULL_REQUEST_TEMPLATE.md`
 
 ## 문서 위치
 - `docs/` 하위에 리뷰 정책/체크리스트/운영 문서 정리

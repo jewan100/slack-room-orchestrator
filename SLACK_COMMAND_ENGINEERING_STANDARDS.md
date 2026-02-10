@@ -107,9 +107,10 @@
 
 ## 5) Slack 워크플로우 표준
 
-### 5.1 채널 라우팅 고정
-- `/room start`: `택배-비서` 채널 스레드
-- `/room launch`: `아이디어-회의실` 채널(`C0ADRCT09DK`) 스레드
+### 5.1 채널 라우팅 표준 (설정 기반)
+- `/room start`: `ROOM_START_CHANNEL_ID`(또는 `ROOM_START_CHANNEL_NAME`) 설정값의 채널 스레드
+- `/room launch`: `ROOM_LAUNCH_CHANNEL_ID`(또는 `ROOM_LAUNCH_CHANNEL_NAME`) 설정값의 채널 스레드
+- 환경별 채널 ID/이름은 환경변수로 주입하고, 코드/문서에 하드코딩하지 않는다.
 
 ### 5.2 명령 세트 (MVP)
 - `/room start <topic>`

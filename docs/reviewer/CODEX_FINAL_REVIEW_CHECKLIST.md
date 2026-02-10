@@ -7,7 +7,7 @@
 
 ### 1) 기능 정합성
 - [ ] 요구사항 대비 누락 기능 없음
-- [ ] start/launch/status/decide 흐름 연결 정상
+- [ ] start/launch/status/summary/decide 흐름 연결 정상
 
 ### 2) 아키텍처/책임 분리
 - [ ] SRP 위반 없음

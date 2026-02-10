@@ -14,6 +14,7 @@
 
 ## 구현 강제 규칙 (요약)
 - `main` 직접 작업 금지, `develop` 기본
+- 저장소에 `develop`이 없으면 작업 시작 전에 먼저 생성하고 default branch로 지정
 - 기능 브랜치: `feat/` prefix 사용 (예: `feat/add-slack-reminder`)
 - 브랜치명 규칙: `prefix/실제-브랜치-이름` 형식, prefix/실제 이름은 영어 소문자 사용, 실제 이름 단어 구분은 하이픈(`-`) 사용
 - PR + AI 리뷰 + CI 통과 전 머지 금지
@@ -23,12 +24,13 @@
 - 민감정보 로그 금지
 - 모든 의사결정/보류사항 문서화
 
-## 문서 기본 세트 (필수/권장)
-- README (필수)
-- ADR (필수)
-- ARCHITECTURE (권장)
-- RUNBOOK (권장, 운영/배포가 필요한 서비스일 경우 필수)
-- CHANGELOG (권장, 배포/버전 관리가 필요한 경우 필수)
+## 문서 기본 세트 (필수)
+- README
+- ARCHITECTURE
+- ADR
+- API/Command 문서
+- RUNBOOK
+- CHANGELOG
 
 ## 참고
 세부 규칙은 반드시 `JEWAN_DEV_CONSTITUTION.md`를 따른다.
