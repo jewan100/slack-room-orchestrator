@@ -9,12 +9,22 @@ Codex는 이 저장소의 Pull Request를 **머지 직전 최종 점검(Final Ga
 2. `STANDARDS.md`
 3. `SLACK_COMMAND_ENGINEERING_STANDARDS.md` (Slack command 도메인 변경 시)
 4. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md`
+5. `AGENTS.md`
+
+## 참고 전용 문서
+- `.github/copilot-instructions.md`는 **참고용**으로만 사용한다.
+- 머지 차단 판단의 절대 기준은 `STANDARDS.md` 및 체크리스트 문서를 우선한다.
 
 ## 리뷰 원칙
 - 규칙 위반, 누락, 문서 간 모순, 운영 리스크를 우선 탐지한다.
 - 사소한 스타일 취향보다 머지 안정성에 직접 영향이 있는 이슈를 우선한다.
 - 파일/경로/명령어 언급은 코드 포맷으로 표기한다. (예: `README.md`, `src/...`, `npm run test`)
 - 판단 근거는 짧고 명확하게 작성한다.
+
+## 언어 규칙
+- 리뷰 코멘트/요약/판정은 기본적으로 한국어로 작성한다.
+- 코드/경로/명령어/에러코드는 원문(영문)을 유지한다.
+- 사용자가 영어를 명시적으로 요청한 경우에만 영어로 작성한다.
 
 ## 판정 기준 (Verdict)
 - **PASS**: 머지 가능. 필수 수정사항 없음.
