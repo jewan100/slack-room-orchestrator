@@ -18,8 +18,8 @@
 - 가독성 최우선 (짧은 코드보다 읽기 쉬운 코드)
 - 네이밍 엄격 (이름만 보고 역할이 드러나야 함)
 - SRP 강제 (함수/클래스 1책임)
-- 브랜치 전략: `develop` 기본, `feat/*` 작업, `main` 직접 작업 금지
-- 브랜치명 규칙: 영어/소문자/하이픈
+- 브랜치 전략: `develop` 기본, `feat/` prefix 기반 작업, `main` 직접 작업 금지
+- 브랜치명 규칙: `feat/` 등 prefix는 허용하고, prefix 이후 구간은 영어/소문자/하이픈 사용 (예: `feat/add-slack-reminder`)
 - PR/커밋 메시지: 한글 우선, PR 본문 상세 작성
 - 리뷰: Copilot 1차 + Codex 최종 통합 리뷰
 - CI(lint/typecheck/test) 통과 전 머지 금지

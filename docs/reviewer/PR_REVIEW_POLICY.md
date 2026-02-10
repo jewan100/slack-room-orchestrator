@@ -1,7 +1,7 @@
 # PR_REVIEW_POLICY.md
 
 ## 대상 레포
-- `jewan100/slack-room-orchestrator`
+- 현재 레포
 
 ## 리뷰 전략 (2단계)
 1. **1차 리뷰 (커밋/PR 단위): Copilot**
