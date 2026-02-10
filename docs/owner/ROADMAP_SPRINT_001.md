@@ -1,4 +1,4 @@
-# ROADMAP SPRINT-001
+# ROADMAP_SPRINT_001
 
 ## Phase 1
 - 프로젝트 골격 + 문서 + CI 확인

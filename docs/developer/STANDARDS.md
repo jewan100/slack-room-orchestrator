@@ -1,17 +1,22 @@
-# STANDARDS
+# DEVELOPER_STANDARDS_GUIDE
 
-## 핵심
-- 가독성 최우선
-- 네이밍 엄격(역할이 이름에서 드러나야 함)
-- SRP 강제(함수/클래스 1책임)
-- `any` 금지
-- 브랜치명은 `prefix/실제-브랜치-이름` 형식 사용 (`feat/` prefix 허용, 실제 이름은 영어/소문자/하이픈)
+이 문서는 개발자/워커를 위한 **프로젝트 작업 가이드 요약**이다.
 
-## 브랜치
-- 기본: `develop`
-- 기능: `feat/` prefix 사용 (예: `feat/add-login-api`)
-- main 직접 작업 금지
+## 단일 소스 오브 트루스 (필수)
+- 전역/공통 개발 규칙의 단일 소스는 루트의 `STANDARDS.md`다.
+- 규칙 변경은 반드시 `STANDARDS.md`에서 먼저 수정한다.
 
-## 메시지
+## 이 문서의 역할
+- 프로젝트 맥락에서 자주 참고하는 규칙을 요약한다.
+- 루트 규칙과 충돌하는 규칙을 새로 정의하지 않는다.
+
+## 핵심 요약
+- 기본 브랜치: `develop`
+- 기능 브랜치: `feat/` prefix (예: `feat/add-login-api`)
+- 브랜치명: `prefix/actual-name` 형식, actual-name은 영어/소문자/하이픈
 - PR/커밋 메시지: 한글 우선
-- PR 본문 상세 작성 필수
+
+## 참조
+- `STANDARDS.md`
+- `JEWAN_DEV_CONSTITUTION.md`
+- `SLACK_COMMAND_ENGINEERING_STANDARDS.md`

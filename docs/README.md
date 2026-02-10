@@ -28,4 +28,5 @@
 문서 원칙:
 - 짧고 명확하게
 - 결정/변경은 decision에 기록
-- 개발 규칙 변경은 developer/STANDARDS.md 먼저 수정
+- 전역/공통 개발 규칙 변경은 `STANDARDS.md`를 단일 소스로 수정
+- `docs/developer/STANDARDS.md`는 프로젝트 작업 가이드 요약/링크 문서로 유지
