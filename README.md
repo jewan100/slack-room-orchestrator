@@ -34,6 +34,13 @@
 ## 문서 위치
 - `docs/` 하위에 리뷰 정책/체크리스트/운영 문서 정리
 
+## 커맨드 흐름 (MVP)
+1. `/room start <topic>`: 회의 주제/맥락 준비
+2. `/room launch`: 워커 토론 실행
+3. `/room status`: 진행 상태 확인
+4. `/room summary`: 현재까지 논의 요약 확인
+5. `/room decide <A|B|C>`: 최종 결정 확정
+
 ## 확장 방향
 - Slack command orchestration
 - 리마인더/트래킹 자동화
