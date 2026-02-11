@@ -67,6 +67,12 @@ export interface UpdateSessionToRunningInput {
   launchThreadTs: string;
 }
 
+// PREPARED 세션의 start 스레드 식별자를 갱신할 때 사용하는 입력 모델
+export interface UpdatePreparedSessionStartThreadInput {
+  sessionId: string;
+  startThreadTs: string;
+}
+
 // 브리핑 생성용 저장소 입력 모델
 export interface CreateBriefingInput {
   sessionId: string;
@@ -87,7 +93,11 @@ export interface CreateWorkerRoundInput {
 export interface RoomSessionRepository {
   findActiveSessionByStartChannel(startChannelId: string): Promise<RoomSession | null>;
   createPreparedSession(input: CreatePreparedSessionInput): Promise<RoomSession>;
+  updatePreparedSessionStartThread(input: UpdatePreparedSessionStartThreadInput): Promise<RoomSession>;
+  claimPreparedSessionForLaunch(sessionId: string): Promise<boolean>;
+  rollbackLaunchClaim(sessionId: string): Promise<void>;
   updateSessionToRunning(input: UpdateSessionToRunningInput): Promise<RoomSession>;
+  deleteById(sessionId: string): Promise<void>;
   findById(sessionId: string): Promise<RoomSession | null>;
 }
 

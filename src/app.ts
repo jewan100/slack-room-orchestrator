@@ -9,7 +9,7 @@ import { SqliteBriefingRepository } from "./repositories/sqliteBriefingRepositor
 import { SqliteRoomSessionRepository } from "./repositories/sqliteRoomSessionRepository";
 import { SqliteWorkerRoundRepository } from "./repositories/sqliteWorkerRoundRepository";
 import { ROOM_APP_MESSAGES, ROOM_LOG_EVENT_NAMES } from "./shared/messages";
-import { createLogger, type LogLevel } from "./shared/logger";
+import { createLogger, normalizeLogLevel, type LogLevel } from "./shared/logger";
 import { LaunchRoomSessionService } from "./services/launchRoomSessionService";
 import { RunWorkerRoundStubService } from "./services/runWorkerRoundStubService";
 import { StartRoomSessionService } from "./services/startRoomSessionService";
@@ -44,15 +44,6 @@ function readRequiredEnvironmentVariable(name: string): string {
   return value.trim();
 }
 
-// 문자열 로그 레벨을 안전한 도메인 타입으로 변환한다.
-function parseLogLevel(rawLogLevel: string | undefined): LogLevel {
-  if (rawLogLevel === "debug" || rawLogLevel === "info" || rawLogLevel === "warn" || rawLogLevel === "error") {
-    return rawLogLevel;
-  }
-
-  return "info";
-}
-
 // PORT 환경변수를 숫자로 파싱하고 유효성을 검증한다.
 function parsePort(rawPort: string | undefined): number {
   if (!rawPort) {
@@ -75,7 +66,7 @@ function loadAppEnvironment(): AppEnvironment {
     roomStartChannelId: readRequiredEnvironmentVariable("ROOM_START_CHANNEL_ID"),
     roomLaunchChannelId: readRequiredEnvironmentVariable("ROOM_LAUNCH_CHANNEL_ID"),
     sqlitePath: readRequiredEnvironmentVariable("SQLITE_PATH"),
-    logLevel: parseLogLevel(process.env.LOG_LEVEL),
+    logLevel: normalizeLogLevel(process.env.LOG_LEVEL),
     port: parsePort(process.env.PORT)
   };
 }
@@ -149,9 +140,20 @@ async function createAppRuntime(): Promise<AppRuntime> {
 
 // 프로세스 종료 시 리소스를 안전하게 정리하기 위한 시그널 핸들러를 등록한다.
 function registerShutdownHandlers(runtime: AppRuntime): void {
-  const shutdown = async (): Promise<void> => {
+  // 종료 로직은 신호가 여러 번 들어와도 1회만 실행되도록 보호한다.
+  let shutdownInProgress = false;
+
+  const resolveShutdownErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return ROOM_APP_MESSAGES.unknownShutdownError;
+  };
+
+  const shutdown = async (signal: "SIGINT" | "SIGTERM"): Promise<void> => {
     // 종료 시작 로그를 먼저 남긴다.
-    runtime.logger.info(ROOM_LOG_EVENT_NAMES.appStopping);
+    runtime.logger.info(ROOM_LOG_EVENT_NAMES.appStopping, { signal });
 
     // Slack 앱 수신 루프를 중단한다.
     await runtime.app.stop();
@@ -163,11 +165,28 @@ function registerShutdownHandlers(runtime: AppRuntime): void {
     process.exit(0);
   };
 
+  const runShutdown = (signal: "SIGINT" | "SIGTERM"): void => {
+    // 중복 신호는 무시해 리소스 정리 경쟁 상태를 방지한다.
+    if (shutdownInProgress) {
+      return;
+    }
+    shutdownInProgress = true;
+
+    // 비동기 종료 실패를 누락하지 않도록 명시적으로 catch 처리한다.
+    void shutdown(signal).catch((error: unknown) => {
+      runtime.logger.error(ROOM_LOG_EVENT_NAMES.appStopFailed, {
+        signal,
+        errorMessage: resolveShutdownErrorMessage(error)
+      });
+      process.exit(1);
+    });
+  };
+
   process.on("SIGINT", () => {
-    void shutdown();
+    runShutdown("SIGINT");
   });
   process.on("SIGTERM", () => {
-    void shutdown();
+    runShutdown("SIGTERM");
   });
 }
 

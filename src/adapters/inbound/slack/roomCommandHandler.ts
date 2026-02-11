@@ -209,6 +209,7 @@ async function respondAndLogFailure(
     command: request.command.text,
     errorCode: normalizedError.code,
     errorMessage: normalizedError.message,
+    internalErrorMessage: normalizedError.details?.internalErrorMessage,
     elapsedMs: Date.now() - runtimeContext.startedAt
   });
 

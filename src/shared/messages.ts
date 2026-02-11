@@ -56,11 +56,13 @@ export const ROOM_COMMAND_MESSAGES = {
 
 // start 유스케이스에서 사용하는 문구
 export const ROOM_START_SERVICE_MESSAGES = {
+  pendingStartThreadTs: "PENDING_START_THREAD_TS",
   preparedThreadText: (topic: string): string => `회의 세션을 준비했습니다.\n주제: ${topic}`,
   briefingGoal: (topic: string): string => `다음 주제의 최적 실행 경로를 정리합니다: ${topic}`,
   briefingConstraints: "실행 전 제약사항(범위, 일정, 자원)을 정리합니다.",
   briefingSuccessCriteria: "최종 결정을 위한 측정 가능한 성공 기준을 정의합니다.",
-  briefingSavedNotice: "브리핑 템플릿 저장 완료. 다음 액션: /room summary 또는 /room launch"
+  briefingSavedNotice: "브리핑 템플릿 저장 완료. 다음 액션: /room summary 또는 /room launch",
+  followupNoticeUnknownError: "후속 안내 전송 단계에서 알 수 없는 오류"
 } as const;
 
 // summary 유스케이스에서 사용하는 문구
@@ -115,8 +117,10 @@ export const ROOM_SUMMARY_MESSAGES = {
 
 // launch 유스케이스에서 사용하는 문구
 export const ROOM_LAUNCH_SERVICE_MESSAGES = {
+  pendingLaunchThreadTs: "PENDING_LAUNCH_THREAD_TS",
   launchThreadText: (topic: string): string => `실행을 시작합니다.\n주제: ${topic}`,
   roundCompletedTitle: "워커 라운드 완료(스텁):",
+  followupNoticeUnknownError: "라운드 완료 안내 전송 단계에서 알 수 없는 오류",
   candidateLine: (input: {
     option: string;
     summary: string;
@@ -145,7 +149,8 @@ export const ROOM_WORKER_STUB_MESSAGES = {
 export const ROOM_APP_MESSAGES = {
   missingRequiredEnvironmentVariable: (name: string): string => `필수 환경변수가 없습니다: ${name}`,
   invalidPort: "PORT는 0보다 큰 숫자여야 합니다.",
-  unknownBootstrapError: "부트스트랩 중 알 수 없는 오류가 발생했습니다."
+  unknownBootstrapError: "부트스트랩 중 알 수 없는 오류가 발생했습니다.",
+  unknownShutdownError: "종료 처리 중 알 수 없는 오류가 발생했습니다."
 } as const;
 
 // 로그 이벤트명 카탈로그
@@ -156,9 +161,14 @@ export const ROOM_LOG_EVENT_NAMES = {
   roomCommandCompleted: "room.command.completed",
   roomCommandFailed: "room.command.failed",
   roomStartCompleted: "room.start.completed",
+  roomStartFollowupNoticeFailed: "room.start.followup_notice_failed",
+  roomStartReservationRollbackFailed: "room.start.reservation_rollback_failed",
   roomSummaryCompleted: "room.summary.completed",
   roomLaunchCompleted: "room.launch.completed",
+  roomLaunchFollowupNoticeFailed: "room.launch.followup_notice_failed",
+  roomLaunchClaimRollbackFailed: "room.launch.claim_rollback_failed",
   appStopping: "slack-room-orchestrator.stop",
+  appStopFailed: "slack-room-orchestrator.stop_failed",
   appStarted: "slack-room-orchestrator.start"
 } as const;
 
@@ -166,9 +176,14 @@ export const ROOM_LOG_EVENT_NAMES = {
 export const ROOM_SQLITE_MESSAGES = {
   notConnected: "SqliteClient가 연결되지 않았습니다. connect() 이후에 데이터베이스를 사용해 주세요.",
   createPreparedSessionFailed: "PREPARED 세션 생성에 실패했습니다.",
+  updatePreparedSessionStartThreadFailed: "PREPARED 세션의 start 스레드 정보를 갱신하는 데 실패했습니다.",
+  claimPreparedSessionForLaunchFailed: "launch 실행을 위한 PREPARED 세션 선점에 실패했습니다.",
+  rollbackLaunchClaimFailed: "launch 선점 롤백에 실패했습니다.",
   updateSessionToRunningFailed: "세션 상태를 RUNNING으로 변경하는 데 실패했습니다.",
+  deleteSessionFailed: "세션 삭제에 실패했습니다.",
   createBriefingFailed: "브리핑 생성에 실패했습니다.",
-  createWorkerRoundFailed: "워커 라운드 생성에 실패했습니다."
+  createWorkerRoundFailed: "워커 라운드 생성에 실패했습니다.",
+  parseWorkerRoundCandidatesFailed: "워커 라운드 후보안 파싱에 실패했습니다."
 } as const;
 
 // Slack 어댑터 계층에서 사용하는 오류 문구

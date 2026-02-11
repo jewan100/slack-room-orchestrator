@@ -46,7 +46,7 @@ function writeLog(level: LogLevel, message: string, context?: Record<string, unk
 
 // 외부 입력 문자열을 안전한 로그 레벨로 정규화한다.
 // 알 수 없는 값은 info로 강등해 로그 누락을 막는다.
-function parseLogLevel(rawLevel: string | undefined): LogLevel {
+export function normalizeLogLevel(rawLevel: string | undefined): LogLevel {
   if (rawLevel === "debug" || rawLevel === "info" || rawLevel === "warn" || rawLevel === "error") {
     return rawLevel;
   }
@@ -56,8 +56,7 @@ function parseLogLevel(rawLevel: string | undefined): LogLevel {
 
 // 최소 출력 레벨이 고정된 logger 인스턴스를 생성한다.
 // 호출부는 문자열 결합보다 구조화 context를 전달하는 것을 기본으로 한다.
-export function createLogger(rawLevel: string | undefined): Logger {
-  const currentLevel = parseLogLevel(rawLevel);
+export function createLogger(currentLevel: LogLevel): Logger {
 
   return {
     debug(message, context) {

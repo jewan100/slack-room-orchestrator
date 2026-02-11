@@ -12,6 +12,15 @@ interface RoomWorkerRoundRow {
   created_at: string;
 }
 
+// DB의 JSON 문자열 후보안을 안전하게 역직렬화한다.
+function parseWorkerCandidates(rawCandidates: string): WorkerCandidate[] {
+  try {
+    return JSON.parse(rawCandidates) as WorkerCandidate[];
+  } catch {
+    throw new Error(ROOM_SQLITE_MESSAGES.parseWorkerRoundCandidatesFailed);
+  }
+}
+
 // 워커 라운드 저장/조회 구현체
 export class SqliteWorkerRoundRepository implements WorkerRoundRepository {
   public constructor(private readonly db: SqliteDatabase) {}
@@ -68,7 +77,7 @@ export class SqliteWorkerRoundRepository implements WorkerRoundRepository {
     }
 
     // DB 문자열(JSON)을 도메인 배열 타입으로 역직렬화한다.
-    const parsedCandidates = JSON.parse(row.candidates_json) as WorkerCandidate[];
+    const parsedCandidates = parseWorkerCandidates(row.candidates_json);
 
     // 스네이크 케이스 row를 앱 표준 카멜 케이스 모델로 변환한다.
     return {

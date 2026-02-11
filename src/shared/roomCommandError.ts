@@ -26,7 +26,10 @@ export function normalizeRoomCommandError(error: unknown): RoomCommandError {
   }
 
   if (error instanceof Error) {
-    return new RoomCommandError(ROOM_ERROR_CODES.ROOM_INTERNAL_ERROR, error.message);
+    // 내부 오류는 사용자에게 고정 문구만 노출하고 원문은 로그 컨텍스트로 전달한다.
+    return new RoomCommandError(ROOM_ERROR_CODES.ROOM_INTERNAL_ERROR, ROOM_ERROR_MESSAGES.ROOM_INTERNAL_ERROR, {
+      internalErrorMessage: error.message
+    });
   }
 
   return new RoomCommandError(ROOM_ERROR_CODES.ROOM_INTERNAL_ERROR);

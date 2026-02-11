@@ -5,6 +5,7 @@ import type {
   CreatePreparedSessionInput,
   RoomSession,
   RoomSessionRepository,
+  UpdatePreparedSessionStartThreadInput,
   UpdateSessionToRunningInput
 } from "../shared/types";
 
@@ -86,6 +87,88 @@ export class SqliteRoomSessionRepository implements RoomSessionRepository {
     return created;
   }
 
+  // PREPARED 세션의 start 스레드 식별자를 갱신한다.
+  public async updatePreparedSessionStartThread(input: UpdatePreparedSessionStartThreadInput): Promise<RoomSession> {
+    // start 스레드 연결 시점의 갱신 시각을 함께 기록한다.
+    const now = new Date().toISOString();
+
+    // PREPARED 세션에만 start_thread_ts를 반영해 상태 정합성을 유지한다.
+    const result = await this.db.run(
+      `
+      UPDATE room_sessions
+      SET start_thread_ts = ?,
+          updated_at = ?
+      WHERE id = ?
+        AND state = 'PREPARED'
+    `,
+      input.startThreadTs,
+      now,
+      input.sessionId
+    );
+
+    if (result.changes !== 1) {
+      throw new Error(ROOM_SQLITE_MESSAGES.updatePreparedSessionStartThreadFailed);
+    }
+
+    // 갱신된 세션을 다시 읽어 일관된 모델로 반환한다.
+    const updated = await this.findById(input.sessionId);
+    if (!updated) {
+      throw new Error(ROOM_SQLITE_MESSAGES.updatePreparedSessionStartThreadFailed);
+    }
+
+    return updated;
+  }
+
+  // launch 시작 전에 PREPARED 세션을 원자적으로 선점한다.
+  public async claimPreparedSessionForLaunch(sessionId: string): Promise<boolean> {
+    // 선점 시점의 갱신 시각을 기록한다.
+    const now = new Date().toISOString();
+
+    // PREPARED 상태인 경우에만 RUNNING으로 전이해 동시 launch를 차단한다.
+    const result = await this.db.run(
+      `
+      UPDATE room_sessions
+      SET state = 'RUNNING',
+          updated_at = ?
+      WHERE id = ?
+        AND state = 'PREPARED'
+    `,
+      now,
+      sessionId
+    );
+
+    if (typeof result.changes !== "number") {
+      throw new Error(ROOM_SQLITE_MESSAGES.claimPreparedSessionForLaunchFailed);
+    }
+
+    return result.changes === 1;
+  }
+
+  // launch 선점 이후 실패가 발생하면 PREPARED 상태로 롤백한다.
+  public async rollbackLaunchClaim(sessionId: string): Promise<void> {
+    // 롤백 시점의 갱신 시각을 기록한다.
+    const now = new Date().toISOString();
+
+    // RUNNING 상태를 PREPARED로 되돌리고 launch 메타데이터를 초기화한다.
+    const result = await this.db.run(
+      `
+      UPDATE room_sessions
+      SET state = 'PREPARED',
+          launch_channel_id = NULL,
+          launch_thread_ts = NULL,
+          updated_at = ?
+      WHERE id = ?
+        AND state = 'RUNNING'
+    `,
+      now,
+      sessionId
+    );
+
+    if (result.changes !== 1) {
+      throw new Error(ROOM_SQLITE_MESSAGES.rollbackLaunchClaimFailed);
+    }
+  }
+
   // 세션을 RUNNING으로 전이하면서 launch 스레드 정보를 함께 업데이트한다.
   public async updateSessionToRunning(input: UpdateSessionToRunningInput): Promise<RoomSession> {
     // 상태 전이 시점의 갱신 시각을 함께 기록한다.
@@ -114,6 +197,22 @@ export class SqliteRoomSessionRepository implements RoomSessionRepository {
     }
 
     return updated;
+  }
+
+  // 세션 ID 기준으로 단건 삭제한다.
+  public async deleteById(sessionId: string): Promise<void> {
+    // 보상 처리 시점에는 정확히 1건이 삭제되어야 한다.
+    const result = await this.db.run(
+      `
+      DELETE FROM room_sessions
+      WHERE id = ?
+    `,
+      sessionId
+    );
+
+    if (result.changes !== 1) {
+      throw new Error(ROOM_SQLITE_MESSAGES.deleteSessionFailed);
+    }
   }
 
   // 세션 ID 기반 단건 조회다.
