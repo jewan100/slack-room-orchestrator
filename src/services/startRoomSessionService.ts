@@ -2,7 +2,13 @@ import { ROOM_COMMAND_NAMES, ROOM_LOG_EVENT_NAMES, ROOM_START_SERVICE_MESSAGES }
 import { ROOM_ERROR_CODES } from "../shared/errorCodes";
 import type { Logger } from "../shared/logger";
 import { RoomCommandError } from "../shared/roomCommandError";
-import type { BriefingRepository, RoomSession, RoomSessionRepository, SlackThreadPort } from "../shared/types";
+import type {
+  BriefingRepository,
+  RoomModeLifecycleService,
+  RoomSession,
+  RoomSessionRepository,
+  SlackThreadPort
+} from "../shared/types";
 import { ensureNoActiveSession, validateStartTopic } from "../validators/roomCommandValidator";
 
 // start 유스케이스 입력 모델
@@ -16,6 +22,12 @@ export interface StartRoomSessionInput {
 // start 유스케이스 반환 모델
 export interface StartRoomSessionResult {
   session: RoomSession;
+}
+
+// start 유스케이스의 OpenClaw 연동 옵션
+export interface StartRoomSessionOpenClawOptions {
+  roomModeLifecycleService: RoomModeLifecycleService;
+  roomModeTtlMinutes: number;
 }
 
 // sqlite 예외 객체에서 사용할 수 있는 구조화 필드 타입
@@ -57,7 +69,7 @@ function extractSqliteConstraintErrorMetadata(error: unknown): {
 }
 
 // start 동시 요청으로 발생하는 활성 세션 unique 충돌 여부를 판별한다.
-function isActiveSessionConstraintError(error: unknown): boolean {
+function isAlreadyRunningConstraintError(error: unknown): boolean {
   const metadata = extractSqliteConstraintErrorMetadata(error);
 
   // sqlite 에러 코드/errno를 먼저 확인해 unique 제약 충돌 후보를 좁힌다.
@@ -72,8 +84,23 @@ function isActiveSessionConstraintError(error: unknown): boolean {
 
   return (
     metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeSessionConstraintIndexName) ||
-    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeSessionConstraintColumnName)
+    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeSessionConstraintColumnName) ||
+    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeWatchTargetConstraintIndexName) ||
+    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeWatchTargetConstraintColumnName)
   );
+}
+
+// start 흐름에서 발생한 sqlite unique 충돌을 도메인 예외로 정규화한다.
+function normalizeStartFlowError(error: unknown): unknown {
+  if (error instanceof RoomCommandError) {
+    return error;
+  }
+
+  if (isAlreadyRunningConstraintError(error)) {
+    return new RoomCommandError(ROOM_ERROR_CODES.ROOM_ALREADY_RUNNING);
+  }
+
+  return error;
 }
 
 // `/room start` 유스케이스 오케스트레이션 서비스
@@ -82,7 +109,8 @@ export class StartRoomSessionService {
   public constructor(
     private readonly roomSessionRepository: RoomSessionRepository,
     private readonly briefingRepository: BriefingRepository,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly openClawOptions?: StartRoomSessionOpenClawOptions
   ) {}
 
   // PREPARED 세션을 먼저 선점해 동시 start 요청과 스레드 orphan 가능성을 줄인다.
@@ -97,7 +125,7 @@ export class StartRoomSessionService {
       });
     } catch (error) {
       // 저장소 unique 충돌은 도메인 에러코드(ROOM_ALREADY_RUNNING)로 정규화한다.
-      if (isActiveSessionConstraintError(error)) {
+      if (isAlreadyRunningConstraintError(error)) {
         throw new RoomCommandError(ROOM_ERROR_CODES.ROOM_ALREADY_RUNNING);
       }
       throw error;
@@ -150,6 +178,19 @@ export class StartRoomSessionService {
     }
   }
 
+  // start 성공 직후 OpenClaw planning mode를 ON으로 전환한다.
+  // 옵션이 비활성인 환경에서는 아무 동작도 하지 않는다.
+  private async turnOnPlanningRoomMode(session: RoomSession): Promise<void> {
+    if (!this.openClawOptions) {
+      return;
+    }
+
+    await this.openClawOptions.roomModeLifecycleService.turnOnPlanningRoomMode({
+      session,
+      ttlMinutes: this.openClawOptions.roomModeTtlMinutes
+    });
+  }
+
   // 후속 안내 메시지 실패는 start 성공 여부와 분리해 처리한다.
   private async postFollowupNotice(
     slackThreadPort: SlackThreadPort,
@@ -175,7 +216,7 @@ export class StartRoomSessionService {
 
   // start 명령 전체 흐름:
   // 1) 입력 검증 2) 활성 세션 중복 검사 3) PREPARED 세션 선점
-  // 4) 준비 스레드 생성 5) 브리핑 저장 6) 후속 액션 안내
+  // 4) 준비 스레드 생성 5) 브리핑 저장 6) OpenClaw mode ON enqueue 7) 후속 액션 안내
   public async execute(input: StartRoomSessionInput, slackThreadPort: SlackThreadPort): Promise<StartRoomSessionResult> {
     // 사용자가 입력한 주제를 정규화(trim)하고 빈 값이면 예외를 발생시킨다.
     const topic = validateStartTopic(input.topic);
@@ -213,6 +254,10 @@ export class StartRoomSessionService {
         successCriteria: ROOM_START_SERVICE_MESSAGES.briefingSuccessCriteria
       });
 
+      // OpenClaw가 해당 스레드를 감시할 수 있도록 mode ON 이벤트를 적재한다.
+      await this.turnOnPlanningRoomMode(session);
+
+      // 사용자 편의를 위한 후속 안내는 best-effort로 전송한다.
       await this.postFollowupNotice(slackThreadPort, input, session.id, thread.threadTs);
 
       // 완료 로그를 남겨 운영자가 request/session 단위로 추적할 수 있게 한다.
@@ -225,9 +270,10 @@ export class StartRoomSessionService {
       // 호출자(핸들러)에서 응답 메시지를 조립할 수 있도록 세션 정보를 반환한다.
       return { session };
     } catch (error) {
+      const normalizedError = normalizeStartFlowError(error);
       // start 후반 실패 시 선점된 세션을 정리해 재시도 가능 상태를 복구한다.
-      await this.rollbackReservedSession(reservedSession.id, input.startChannelId, error, currentStartThreadTs);
-      throw error;
+      await this.rollbackReservedSession(reservedSession.id, input.startChannelId, normalizedError, currentStartThreadTs);
+      throw normalizedError;
     }
   }
 }

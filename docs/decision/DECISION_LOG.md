@@ -98,3 +98,29 @@
   - 신규 커맨드(`status`, `decide`, 택배/소포 확장 도메인) 구현 시 동일 규칙 적용
   - Final review에서 체크리스트 항목으로 반드시 검증
 - 상태: 유효
+
+### D-005
+- 날짜: 2026-02-11
+- 주제: OpenClaw 연동 v1 실시간 우선 경로 고정
+- 영향 범위: `/room` 유스케이스, Slack message 이벤트 수집, DB 스키마, 운영 환경변수
+- 결정:
+  - 실시간 반응은 Relay 채널 고정 매핑(`ROOM_START_CHANNEL_ID`) + SQLite(`room_watch_targets`) 판별 경로를 우선 사용
+  - thread별 동적 라우팅 제어(HTTP/NDJSON bind/unbind)는 v1에서 보류
+  - `room_watch_targets`는 채널당 ON 1개 불변식을 유지
+  - `/room start` 성공 시 planning watch target ON + `ROOM_MODE_ON` 이벤트 enqueue
+  - `/room launch` 성공 시 planning watch target OFF + `ROOM_MODE_OFF(offReason=LAUNCH)` enqueue
+  - launch 없이 TTL 만료 시 `ROOM_MODE_OFF(offReason=TTL)` 자동 enqueue
+  - 메시지 누적/주기 기반 자동 트리거(`ROOM_SUMMARY_TRIGGER`, `ROOM_QUESTION_TRIGGER`)는 서버가 enqueue하고 실제 요약/질문 생성은 OpenClaw가 수행
+  - outbox -> NDJSON 디스패치는 at-least-once로 운영하며 소비 측에서 `eventId` 기준 중복 제거
+  - 보안상 메시지 본문 전문은 이벤트/DB/NDJSON에 저장하지 않음
+- 근거:
+  - 사용자가 요구한 \"실시간 대화형 택배\" 경험은 폴링 기반 동적 매핑보다 채널 고정 라우팅이 지연/복잡도 측면에서 유리
+  - Slash 명령 서버 구현 완료 이후 \"택배가 계속 듣고 정리\" 요구를 최소 변경으로 연결하기 위한 확장 필요
+  - 수명 규칙(ON/OFF/TTL)을 고정해야 장기 운영에서 감시 대상 누적/정합성 붕괴를 방지 가능
+  - outbox 기반 전달은 재시작 복구와 장애 내성을 동시에 확보
+- 후속 액션:
+  - OpenClaw 소비 측은 채널 고정 입력에서 `room_watch_targets` ON + `thread_ts` 일치 조건으로 회의 모드 반응을 판별
+  - OpenClaw 소비 측에서 `eventId` 중복 제거를 필수 적용
+  - `/room stop` 수동 종료 커맨드는 2차 범위에서 설계
+  - 실 LLM adapter 연동 시 trigger 이벤트 소비 계약 문서화
+- 상태: 유효

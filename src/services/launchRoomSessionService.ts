@@ -9,6 +9,7 @@ import type { Logger } from "../shared/logger";
 import { RoomCommandError } from "../shared/roomCommandError";
 import type {
   BriefingRepository,
+  RoomModeLifecycleService,
   RoomSession,
   RoomSessionRepository,
   RoomWorkerRound,
@@ -37,6 +38,7 @@ export interface LaunchRoomSessionServiceDependencies {
   briefingRepository: BriefingRepository;
   workerRoundRepository: WorkerRoundRepository;
   runWorkerRoundStubService: RunWorkerRoundStubService;
+  roomModeLifecycleService: RoomModeLifecycleService;
   logger: Logger;
 }
 
@@ -69,6 +71,7 @@ export class LaunchRoomSessionService {
   private readonly briefingRepository: BriefingRepository;
   private readonly workerRoundRepository: WorkerRoundRepository;
   private readonly runWorkerRoundStubService: RunWorkerRoundStubService;
+  private readonly roomModeLifecycleService: RoomModeLifecycleService;
   private readonly logger: Logger;
 
   public constructor(dependencies: LaunchRoomSessionServiceDependencies) {
@@ -76,6 +79,7 @@ export class LaunchRoomSessionService {
     this.briefingRepository = dependencies.briefingRepository;
     this.workerRoundRepository = dependencies.workerRoundRepository;
     this.runWorkerRoundStubService = dependencies.runWorkerRoundStubService;
+    this.roomModeLifecycleService = dependencies.roomModeLifecycleService;
     this.logger = dependencies.logger;
   }
 
@@ -208,6 +212,12 @@ export class LaunchRoomSessionService {
     }
   }
 
+  // launch 성공 경로에서 planning watch target OFF를 강제한다.
+  // OFF 전환 실패는 정합성 우선 원칙에 따라 launch 실패로 승격한다.
+  private async turnOffPlanningRoomMode(session: RoomSession): Promise<void> {
+    await this.roomModeLifecycleService.turnOffPlanningRoomMode({ session });
+  }
+
   // launch 핵심 단계를 실행하고 결과를 조립한다.
   private async runLaunchCore(
     input: LaunchRoomSessionInput,
@@ -248,6 +258,9 @@ export class LaunchRoomSessionService {
       candidateLines: this.buildCandidateLines(candidates)
     });
 
+    // launch 성공 직후 planning mode OFF를 enqueue해 OpenClaw 감시 수명을 닫는다.
+    await this.turnOffPlanningRoomMode(launchSession);
+
     // 운영 로그를 남겨 세션 상태 전이와 실행 채널을 추적한다.
     this.logger.info(ROOM_LOG_EVENT_NAMES.roomLaunchCompleted, {
       sessionId: launchSession.id,
@@ -263,7 +276,7 @@ export class LaunchRoomSessionService {
 
   // launch 흐름:
   // 1) 활성 세션 확인 2) PREPARED 상태 검증 3) PREPARED 선점
-  // 4) 실행 스레드 생성 5) 스텁 후보안 생성/저장 6) 결과 공지
+  // 4) 실행 스레드 생성 5) 스텁 후보안 생성/저장 6) planning mode OFF
   public async execute(input: LaunchRoomSessionInput, slackThreadPort: SlackThreadPort): Promise<LaunchRoomSessionResult> {
     // launch 대상이 되는 활성 세션을 시작 채널 기준으로 조회한다.
     // 세션이 없으면 ROOM_NO_ACTIVE_SESSION 예외로 즉시 종료된다.

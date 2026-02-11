@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ROOM_ERROR_CODES } from "../src/shared/errorCodes";
 import { ROOM_LAUNCH_SERVICE_MESSAGES } from "../src/shared/messages";
 import { createLogger } from "../src/shared/logger";
-import type { RoomSession, SlackThreadPort } from "../src/shared/types";
+import type { RoomModeLifecycleService, RoomSession, SlackThreadPort } from "../src/shared/types";
 import { LaunchRoomSessionService } from "../src/services/launchRoomSessionService";
+import { ManageRoomModeService } from "../src/services/openclaw/manageRoomModeService";
 import { RunWorkerRoundStubService } from "../src/services/runWorkerRoundStubService";
 import { createTestDatabase, type TestDatabaseContext } from "./helpers/createTestDatabase";
 
@@ -81,6 +82,18 @@ async function createLaunchReadySession(context: TestDatabaseContext, topic: str
   return session;
 }
 
+// launch 테스트에서 room mode ON/OFF 훅을 무시하기 위한 no-op 구현체
+function createNoopRoomModeLifecycleService(): RoomModeLifecycleService {
+  return {
+    async turnOnPlanningRoomMode() {
+      return;
+    },
+    async turnOffPlanningRoomMode() {
+      return;
+    }
+  };
+}
+
 // `LaunchRoomSessionService` 핵심 시나리오를 검증한다.
 describe("LaunchRoomSessionService", () => {
   let context: TestDatabaseContext | null = null;
@@ -102,6 +115,7 @@ describe("LaunchRoomSessionService", () => {
       briefingRepository: context.briefingRepository,
       workerRoundRepository: context.workerRoundRepository,
       runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService: createNoopRoomModeLifecycleService(),
       logger: createLogger("error")
     });
 
@@ -143,6 +157,7 @@ describe("LaunchRoomSessionService", () => {
       briefingRepository: context.briefingRepository,
       workerRoundRepository: context.workerRoundRepository,
       runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService: createNoopRoomModeLifecycleService(),
       logger: createLogger("error")
     });
 
@@ -172,6 +187,7 @@ describe("LaunchRoomSessionService", () => {
       briefingRepository: context.briefingRepository,
       workerRoundRepository: context.workerRoundRepository,
       runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService: createNoopRoomModeLifecycleService(),
       logger: createLogger("error")
     });
 
@@ -204,6 +220,7 @@ describe("LaunchRoomSessionService", () => {
       briefingRepository: context.briefingRepository,
       workerRoundRepository: context.workerRoundRepository,
       runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService: createNoopRoomModeLifecycleService(),
       logger: createLogger("error")
     });
 
@@ -235,6 +252,7 @@ describe("LaunchRoomSessionService", () => {
       briefingRepository: context.briefingRepository,
       workerRoundRepository: context.workerRoundRepository,
       runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService: createNoopRoomModeLifecycleService(),
       logger: createLogger("error")
     });
 
@@ -268,6 +286,7 @@ describe("LaunchRoomSessionService", () => {
       briefingRepository: context.briefingRepository,
       workerRoundRepository: context.workerRoundRepository,
       runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService: createNoopRoomModeLifecycleService(),
       logger: createLogger("error")
     });
 
@@ -318,6 +337,7 @@ describe("LaunchRoomSessionService", () => {
       briefingRepository: context.briefingRepository,
       workerRoundRepository: context.workerRoundRepository,
       runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService: createNoopRoomModeLifecycleService(),
       logger: createLogger("error")
     });
 
@@ -350,6 +370,7 @@ describe("LaunchRoomSessionService", () => {
       briefingRepository: context.briefingRepository,
       workerRoundRepository,
       runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService: createNoopRoomModeLifecycleService(),
       logger: createLogger("error")
     });
 
@@ -377,5 +398,51 @@ describe("LaunchRoomSessionService", () => {
     );
 
     expect(retried.round.roundNo).toBe(2);
+  });
+
+  // launch 성공 시 planning watch target이 OFF로 전환되고 ROOM_MODE_OFF가 enqueue되는지 검증한다.
+  it("turns off planning watch target and enqueues ROOM_MODE_OFF on launch success", async () => {
+    context = await createTestDatabase();
+    const session = await createLaunchReadySession(context, "Launch with mode off");
+
+    await context.roomWatchTargetRepository.createWatchTargetOn({
+      sessionId: session.id,
+      channelId: "C_START",
+      threadTs: "1000.0001",
+      mode: "PLANNING",
+      ttlExpiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    const roomModeLifecycleService = new ManageRoomModeService(
+      context.roomWatchTargetRepository,
+      context.openClawEventOutboxRepository,
+      createLogger("error")
+    );
+
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: context.roomSessionRepository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository: context.workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService,
+      logger: createLogger("error")
+    });
+
+    const result = await service.execute(
+      {
+        startChannelId: "C_START",
+        launchChannelId: "C_LAUNCH"
+      },
+      new FakeSlackThreadPort()
+    );
+
+    expect(result.session.state).toBe("RUNNING");
+    const onWatchTarget = await context.roomWatchTargetRepository.findOnWatchTargetBySessionId(session.id);
+    expect(onWatchTarget).toBeNull();
+
+    const pendingEvents = await context.openClawEventOutboxRepository.claimPendingEvents(new Date().toISOString(), 10);
+    const roomModeOffEvent = pendingEvents.find((event) => event.eventType === "ROOM_MODE_OFF");
+    expect(roomModeOffEvent).toBeDefined();
+    expect(roomModeOffEvent?.payload.eventType).toBe("ROOM_MODE_OFF");
   });
 });

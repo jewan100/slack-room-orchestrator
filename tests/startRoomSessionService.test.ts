@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ROOM_ERROR_CODES } from "../src/shared/errorCodes";
+import { OPENCLAW_EVENT_PROTOCOL_VERSION } from "../src/shared/openclawSyncTypes";
 import { ROOM_START_SERVICE_MESSAGES } from "../src/shared/messages";
 import { createLogger } from "../src/shared/logger";
-import type { SlackThreadPort } from "../src/shared/types";
+import type { RoomModeLifecycleService, SlackThreadPort } from "../src/shared/types";
+import { ManageRoomModeService } from "../src/services/openclaw/manageRoomModeService";
 import { StartRoomSessionService } from "../src/services/startRoomSessionService";
 import { createTestDatabase, type TestDatabaseContext } from "./helpers/createTestDatabase";
 
@@ -246,6 +248,91 @@ describe("StartRoomSessionService", () => {
         new FakeSlackThreadPort()
       )
     ).rejects.toThrow("briefing save failed");
+
+    const activeSession = await context.roomSessionRepository.findActiveSessionByStartChannel("C_START");
+    expect(activeSession).toBeNull();
+  });
+
+  // start 성공 시 OpenClaw planning mode ON 대상/이벤트가 함께 생성되는지 검증한다.
+  it("creates watch target and ROOM_MODE_ON outbox event on start success", async () => {
+    context = await createTestDatabase();
+    const roomModeLifecycleService = new ManageRoomModeService(
+      context.roomWatchTargetRepository,
+      context.openClawEventOutboxRepository,
+      createLogger("error")
+    );
+
+    const service = new StartRoomSessionService(
+      context.roomSessionRepository,
+      context.briefingRepository,
+      createLogger("error"),
+      {
+        roomModeLifecycleService,
+        roomModeTtlMinutes: 60
+      }
+    );
+    const result = await service.execute(
+      {
+        topic: "OpenClaw mode on",
+        requestedByUserId: "U01",
+        workspaceId: "T01",
+        startChannelId: "C_START"
+      },
+      new FakeSlackThreadPort()
+    );
+
+    const watchTarget = await context.roomWatchTargetRepository.findOnWatchTargetBySessionId(result.session.id);
+    expect(watchTarget).not.toBeNull();
+    expect(watchTarget?.status).toBe("ON");
+    expect(watchTarget?.mode).toBe("PLANNING");
+
+    const pendingEvents = await context.openClawEventOutboxRepository.claimPendingEvents(new Date().toISOString(), 10);
+    expect(pendingEvents.length).toBe(1);
+    expect(pendingEvents[0]?.eventType).toBe("ROOM_MODE_ON");
+    expect(pendingEvents[0]?.payload.version).toBe(OPENCLAW_EVENT_PROTOCOL_VERSION);
+  });
+
+  // watch target 유니크 충돌을 ROOM_ALREADY_RUNNING으로 매핑하고 예약 세션을 롤백하는지 검증한다.
+  it("maps watch target unique conflict to ROOM_ALREADY_RUNNING and rolls back reserved session", async () => {
+    context = await createTestDatabase();
+    const failingLifecycleService: RoomModeLifecycleService = {
+      async turnOnPlanningRoomMode(): Promise<void> {
+        const constraintError = new Error(ROOM_START_SERVICE_MESSAGES.activeWatchTargetConstraintIndexName) as Error & {
+          code: string;
+          errno: number;
+        };
+        constraintError.code = ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrorCode;
+        constraintError.errno = ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrno;
+        throw constraintError;
+      },
+      async turnOffPlanningRoomMode(): Promise<void> {
+        return;
+      }
+    };
+
+    const service = new StartRoomSessionService(
+      context.roomSessionRepository,
+      context.briefingRepository,
+      createLogger("error"),
+      {
+        roomModeLifecycleService: failingLifecycleService,
+        roomModeTtlMinutes: 60
+      }
+    );
+
+    await expect(
+      service.execute(
+        {
+          topic: "Watch target unique conflict",
+          requestedByUserId: "U01",
+          workspaceId: "T01",
+          startChannelId: "C_START"
+        },
+        new FakeSlackThreadPort()
+      )
+    ).rejects.toMatchObject({
+      code: ROOM_ERROR_CODES.ROOM_ALREADY_RUNNING
+    });
 
     const activeSession = await context.roomSessionRepository.findActiveSessionByStartChannel("C_START");
     expect(activeSession).toBeNull();

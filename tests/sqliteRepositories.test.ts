@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { OPENCLAW_EVENT_PROTOCOL_VERSION } from "../src/shared/openclawSyncTypes";
 import { ROOM_SQLITE_MESSAGES, ROOM_START_SERVICE_MESSAGES } from "../src/shared/messages";
 import type { WorkerCandidate } from "../src/shared/types";
 import { createTestDatabase, type TestDatabaseContext } from "./helpers/createTestDatabase";
@@ -251,5 +252,191 @@ describe("sqlite repositories", () => {
     await expect(context.workerRoundRepository.findLatestBySessionId(session.id)).rejects.toThrow(
       ROOM_SQLITE_MESSAGES.parseWorkerRoundCandidatesFailed
     );
+  });
+
+  // watch target ON/OFF 전환과 session 연결이 정상 동작하는지 검증한다.
+  it("creates planning watch target and turns it off", async () => {
+    context = await createTestDatabase();
+    const session = await context.roomSessionRepository.createPreparedSession({
+      topic: "Watch target lifecycle",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START",
+      startThreadTs: "1000.0001"
+    });
+
+    const watchTarget = await context.roomWatchTargetRepository.createWatchTargetOn({
+      sessionId: session.id,
+      channelId: "C_START",
+      threadTs: "1000.0001",
+      mode: "PLANNING",
+      ttlExpiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    const loadedOn = await context.roomWatchTargetRepository.findOnWatchTargetBySessionId(session.id);
+    expect(loadedOn?.id).toBe(watchTarget.id);
+
+    const turnedOff = await context.roomWatchTargetRepository.turnOffWatchTarget({
+      watchTargetId: watchTarget.id,
+      offReason: "TTL",
+      turnedOffAt: new Date().toISOString()
+    });
+
+    expect(turnedOff?.status).toBe("OFF");
+    expect(turnedOff?.offReason).toBe("TTL");
+    const loadedAfterOff = await context.roomWatchTargetRepository.findOnWatchTargetBySessionId(session.id);
+    expect(loadedAfterOff).toBeNull();
+  });
+
+  // 같은 채널에 ON watch target을 2개 만들 수 없고, 채널 기준 활성 조회가 동작하는지 검증한다.
+  it("enforces single active watch target per channel and loads active planning by channel", async () => {
+    context = await createTestDatabase();
+    const firstSession = await context.roomSessionRepository.createPreparedSession({
+      topic: "First watch target",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START_1",
+      startThreadTs: "1000.0001"
+    });
+    const secondSession = await context.roomSessionRepository.createPreparedSession({
+      topic: "Second watch target",
+      requestedByUserId: "U02",
+      workspaceId: "T01",
+      startChannelId: "C_START_2",
+      startThreadTs: "1000.0002"
+    });
+
+    const firstWatchTarget = await context.roomWatchTargetRepository.createWatchTargetOn({
+      sessionId: firstSession.id,
+      channelId: "C_WATCH",
+      threadTs: "2000.0001",
+      mode: "PLANNING",
+      ttlExpiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    const activeByChannel = await context.roomWatchTargetRepository.findActivePlanningByChannel("C_WATCH");
+    expect(activeByChannel?.id).toBe(firstWatchTarget.id);
+    expect(activeByChannel?.threadTs).toBe("2000.0001");
+
+    await expect(
+      context.roomWatchTargetRepository.createWatchTargetOn({
+        sessionId: secondSession.id,
+        channelId: "C_WATCH",
+        threadTs: "2000.0002",
+        mode: "PLANNING",
+        ttlExpiresAt: new Date(Date.now() + 60_000).toISOString()
+      })
+    ).rejects.toThrow();
+
+    await context.roomWatchTargetRepository.turnOffWatchTarget({
+      watchTargetId: firstWatchTarget.id,
+      offReason: "LAUNCH",
+      turnedOffAt: new Date().toISOString()
+    });
+
+    const noActiveAfterOff = await context.roomWatchTargetRepository.findActivePlanningByChannel("C_WATCH");
+    expect(noActiveAfterOff).toBeNull();
+  });
+
+  // 같은 channel/thread/messageTs 조합은 한 번만 저장되는지 검증한다.
+  it("deduplicates room thread message metadata with unique composite key", async () => {
+    context = await createTestDatabase();
+    const session = await context.roomSessionRepository.createPreparedSession({
+      topic: "Message dedupe",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START",
+      startThreadTs: "1000.0001"
+    });
+    const watchTarget = await context.roomWatchTargetRepository.createWatchTargetOn({
+      sessionId: session.id,
+      channelId: "C_START",
+      threadTs: "1000.0001",
+      mode: "PLANNING",
+      ttlExpiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    const firstInserted = await context.roomThreadMessageRepository.createMessageMetadataIfAbsent({
+      watchTargetId: watchTarget.id,
+      sessionId: session.id,
+      channelId: watchTarget.channelId,
+      threadTs: watchTarget.threadTs,
+      messageTs: "1000.0002",
+      userId: "U02",
+      subtype: null,
+      isBot: false,
+      eventTs: "1000.0002"
+    });
+    const secondInserted = await context.roomThreadMessageRepository.createMessageMetadataIfAbsent({
+      watchTargetId: watchTarget.id,
+      sessionId: session.id,
+      channelId: watchTarget.channelId,
+      threadTs: watchTarget.threadTs,
+      messageTs: "1000.0002",
+      userId: "U02",
+      subtype: null,
+      isBot: false,
+      eventTs: "1000.0002"
+    });
+
+    expect(firstInserted).toBe(true);
+    expect(secondInserted).toBe(false);
+  });
+
+  // outbox enqueue/dispatch/retry 흐름이 저장소 레벨에서 동작하는지 검증한다.
+  it("supports outbox enqueue, dispatch mark and retry mark", async () => {
+    context = await createTestDatabase();
+    const session = await context.roomSessionRepository.createPreparedSession({
+      topic: "Outbox persistence",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START",
+      startThreadTs: "1000.0001"
+    });
+
+    await context.openClawEventOutboxRepository.enqueueEvent({
+      eventId: "event-mode-on-1",
+      eventType: "ROOM_MODE_ON",
+      sessionId: session.id,
+      channelId: "C_START",
+      threadTs: "1000.0001",
+      topic: session.topic,
+      state: "PREPARED",
+      occurredAt: new Date().toISOString(),
+      version: OPENCLAW_EVENT_PROTOCOL_VERSION,
+      ttlExpiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    const pending = await context.openClawEventOutboxRepository.claimPendingEvents(new Date().toISOString(), 10);
+    expect(pending.length).toBe(1);
+    expect(pending[0]?.eventType).toBe("ROOM_MODE_ON");
+
+    if (!pending[0]) {
+      throw new Error("pending outbox item missing");
+    }
+
+    await context.openClawEventOutboxRepository.markRetry({
+      outboxId: pending[0].id,
+      errorMessage: "append failed",
+      retryAt: new Date(Date.now() + 5000).toISOString()
+    });
+
+    const retryScheduled = await context.openClawEventOutboxRepository.claimPendingEvents(
+      new Date(Date.now() + 6000).toISOString(),
+      10
+    );
+    expect(retryScheduled.length).toBe(1);
+    expect(retryScheduled[0]?.retryCount).toBe(1);
+
+    if (!retryScheduled[0]) {
+      throw new Error("retry outbox item missing");
+    }
+
+    await context.openClawEventOutboxRepository.markDispatched(retryScheduled[0].id, new Date().toISOString());
+    const afterDispatch = await context.openClawEventOutboxRepository.claimPendingEvents(
+      new Date(Date.now() + 6000).toISOString(),
+      10
+    );
+    expect(afterDispatch.length).toBe(0);
   });
 });

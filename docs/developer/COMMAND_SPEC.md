@@ -68,6 +68,7 @@
 2. `ROOM_START_CHANNEL_ID`에 준비 스레드 생성
 3. 세션 상태를 `PREPARED`로 저장
 4. 브리핑 기본 템플릿 저장
+5. planning watch target ON 등록 + `ROOM_MODE_ON` outbox enqueue
 
 ### 결과
 - 상태: `PREPARED`
@@ -124,6 +125,7 @@
 2. `ROOM_LAUNCH_CHANNEL_ID`에 실행 스레드 생성
 3. 스텁 후보안 `A/B/C` 생성 및 저장
 4. 세션 상태를 `RUNNING`으로 전이
+5. planning watch target OFF 전환 + `ROOM_MODE_OFF(offReason=LAUNCH)` outbox enqueue
 
 ### 결과
 - 상태: `RUNNING`
@@ -155,3 +157,37 @@
 - `ROOM_INVALID_STATE_TRANSITION`
 - `ROOM_INVALID_COMMAND`
 - `ROOM_INTERNAL_ERROR`
+
+---
+
+## OpenClaw 연동 v1 (구현 완료)
+
+### 실시간 라우팅 계약 (v1 우선순위)
+- Relay는 `ROOM_START_CHANNEL_ID` 채널을 OpenClaw 회의 세션으로 고정 매핑한다.
+- thread별 동적 매핑 제어(HTTP/NDJSON bind/unbind)는 v1 범위에서 제외한다.
+- OpenClaw는 메시지 수신 시 `room_watch_targets`를 조회해 아래 조건을 동시에 만족할 때만 회의 모드로 처리한다.
+  - `status='ON'`
+  - `channel_id` 일치
+  - `thread_ts` 일치
+- 시작 채널 기준 활성 planning room은 1개만 허용한다.
+
+### 이벤트 프로토콜
+- 타입: `ROOM_MODE_ON`, `ROOM_MODE_OFF`, `ROOM_SUMMARY_TRIGGER`, `ROOM_QUESTION_TRIGGER`
+- 공통 필드: `eventId`, `eventType`, `sessionId`, `channelId`, `threadTs`, `topic`, `state`, `occurredAt`, `version`
+- OFF 전용 필드: `offReason` (`LAUNCH` | `TTL`)
+- 보안 규칙: 이벤트/DB/NDJSON에는 메시지 본문 전문을 저장하지 않는다.
+
+### 수명 규칙
+- ON 시점: `/room start` 성공 직후
+- OFF 시점:
+  - `/room launch` 성공 직후 `offReason=LAUNCH`
+  - `ROOM_MODE_TTL_MINUTES` 경과 시 `offReason=TTL`
+
+### 자동 트리거 규칙
+- summary: 감시 스레드 메시지 누적이 `ROOM_AUTO_SUMMARY_MESSAGE_THRESHOLD`를 충족할 때 enqueue
+- question: `ROOM_AUTO_QUESTION_INTERVAL_MINUTES` 주기로 due 대상 enqueue
+
+### 전달/복구
+- 서버는 outbox에 이벤트를 적재하고, 디스패처가 `OPENCLAW_EVENTS_FILE_PATH` NDJSON로 append한다.
+- 전달 보장은 at-least-once다.
+- 서버 재시작 시 pending outbox는 재디스패치된다.

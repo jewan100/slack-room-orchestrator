@@ -62,6 +62,8 @@ export const ROOM_START_SERVICE_MESSAGES = {
   sqliteConstraintErrno: 19,
   activeSessionConstraintIndexName: "idx_room_sessions_active_per_channel",
   activeSessionConstraintColumnName: "room_sessions.start_channel_id",
+  activeWatchTargetConstraintIndexName: "idx_room_watch_targets_active_per_channel",
+  activeWatchTargetConstraintColumnName: "room_watch_targets.channel_id",
   preparedThreadText: (topic: string): string => `회의 세션을 준비했습니다.\n주제: ${topic}`,
   briefingGoal: (topic: string): string => `다음 주제의 최적 실행 경로를 정리합니다: ${topic}`,
   briefingConstraints: "실행 전 제약사항(범위, 일정, 자원)을 정리합니다.",
@@ -150,6 +152,30 @@ export const ROOM_WORKER_STUB_MESSAGES = {
   optionCCost: "4~6일"
 } as const;
 
+// OpenClaw 연동 기본값/스케줄 설정
+export const ROOM_OPENCLAW_DEFAULTS = {
+  eventsFilePath: "./data/openclaw-room-events.ndjson",
+  modeTtlMinutes: 60,
+  autoSummaryMessageThreshold: 20,
+  autoQuestionIntervalMinutes: 30,
+  outboxDispatchIntervalMs: 5000,
+  lifecycleScanIntervalMs: 60_000,
+  outboxBatchSize: 100,
+  lifecycleBatchSize: 100
+} as const;
+
+// OpenClaw 연동 계층에서 사용하는 공통 문구
+export const ROOM_OPENCLAW_MESSAGES = {
+  invalidPositiveInteger: (name: string): string => `${name}는 0보다 큰 정수여야 합니다.`,
+  missingThreadIdentifiers: "스레드 식별자(channelId/threadTs/messageTs)가 없어 메시지를 무시합니다.",
+  missingPlanningWatchTargetForLaunchOff: "launch OFF 처리 대상인 planning watch target을 찾지 못했습니다.",
+  invalidOutboxPayload: "OpenClaw outbox payload를 파싱하지 못했습니다.",
+  unknownDispatchError: "OpenClaw outbox 디스패치 중 알 수 없는 오류",
+  unknownLifecycleError: "OpenClaw 수명/트리거 스케줄 처리 중 알 수 없는 오류",
+  unknownStopError: "OpenClaw 스케줄러 종료 중 알 수 없는 오류",
+  forbiddenPayloadField: (field: string): string => `OpenClaw 이벤트 payload에 금지 필드가 있습니다: ${field}`
+} as const;
+
 // 앱 부트스트랩/환경검증 문구
 export const ROOM_APP_MESSAGES = {
   missingRequiredEnvironmentVariable: (name: string): string => `필수 환경변수가 없습니다: ${name}`,
@@ -162,6 +188,7 @@ export const ROOM_APP_MESSAGES = {
 // 이벤트 키를 중앙화해 로그 분석 시 필드 분산을 방지한다.
 export const ROOM_LOG_EVENT_NAMES = {
   slackCommandBound: "slack.command.bound",
+  slackMessageEventBound: "slack.message_event.bound",
   roomCommandInvalid: "room.command.invalid",
   roomCommandCompleted: "room.command.completed",
   roomCommandFailed: "room.command.failed",
@@ -175,6 +202,21 @@ export const ROOM_LOG_EVENT_NAMES = {
   roomLaunchThreadMetadataUpdateFailed: "room.launch.thread_metadata_update_failed",
   roomLaunchRoundCleanupFailed: "room.launch.round_cleanup_failed",
   roomLaunchClaimRollbackFailed: "room.launch.claim_rollback_failed",
+  openclawRoomModeOnCompleted: "openclaw.room_mode_on.completed",
+  openclawRoomModeOffCompleted: "openclaw.room_mode_off.completed",
+  openclawRoomModeOffSkipped: "openclaw.room_mode_off.skipped",
+  openclawThreadMessageIgnored: "openclaw.thread_message.ignored",
+  openclawThreadMessageIngested: "openclaw.thread_message.ingested",
+  openclawSummaryTriggerQueued: "openclaw.summary_trigger.queued",
+  openclawQuestionTriggerQueued: "openclaw.question_trigger.queued",
+  openclawTtlOffQueued: "openclaw.ttl_off.queued",
+  openclawLifecycleFailed: "openclaw.lifecycle.failed",
+  openclawOutboxDispatched: "openclaw.outbox.dispatched",
+  openclawOutboxRetryScheduled: "openclaw.outbox.retry_scheduled",
+  openclawOutboxDispatchFailed: "openclaw.outbox.dispatch_failed",
+  openclawSchedulerStarted: "openclaw.scheduler.started",
+  openclawSchedulerStopped: "openclaw.scheduler.stopped",
+  openclawSchedulerStopFailed: "openclaw.scheduler.stop_failed",
   appStopping: "slack-room-orchestrator.stop",
   appStopFailed: "slack-room-orchestrator.stop_failed",
   appStarted: "slack-room-orchestrator.start"
@@ -192,7 +234,17 @@ export const ROOM_SQLITE_MESSAGES = {
   deleteWorkerRoundFailed: "워커 라운드 삭제에 실패했습니다.",
   createBriefingFailed: "브리핑 생성에 실패했습니다.",
   createWorkerRoundFailed: "워커 라운드 생성에 실패했습니다.",
-  parseWorkerRoundCandidatesFailed: "워커 라운드 후보안 파싱에 실패했습니다."
+  parseWorkerRoundCandidatesFailed: "워커 라운드 후보안 파싱에 실패했습니다.",
+  createWatchTargetFailed: "OpenClaw 감시 대상 생성에 실패했습니다.",
+  turnOffWatchTargetFailed: "OpenClaw 감시 대상 OFF 전환에 실패했습니다.",
+  incrementWatchTargetMessageCountFailed: "OpenClaw 감시 대상 메시지 카운트 증가에 실패했습니다.",
+  claimSummaryTriggerFailed: "OpenClaw summary 트리거 선점에 실패했습니다.",
+  claimQuestionTriggerFailed: "OpenClaw question 트리거 선점에 실패했습니다.",
+  createThreadMessageMetadataFailed: "OpenClaw 스레드 메시지 메타데이터 저장에 실패했습니다.",
+  createOutboxEventFailed: "OpenClaw outbox 이벤트 저장에 실패했습니다.",
+  parseOutboxPayloadFailed: "OpenClaw outbox payload 파싱에 실패했습니다.",
+  markOutboxDispatchedFailed: "OpenClaw outbox DISPATCHED 마킹에 실패했습니다.",
+  markOutboxRetryFailed: "OpenClaw outbox 재시도 마킹에 실패했습니다."
 } as const;
 
 // Slack 어댑터 계층에서 사용하는 오류 문구

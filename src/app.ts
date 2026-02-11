@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { config as loadEnvironment } from "dotenv";
 import type { App } from "@slack/bolt";
@@ -5,15 +6,26 @@ import { createBoltApp } from "./adapters/inbound/slack/boltAppFactory";
 import { createRoomCommandHandler } from "./adapters/inbound/slack/roomCommandHandler";
 import { SqliteClient } from "./adapters/outbound/persistence/sqliteClient";
 import { SlackThreadAdapter } from "./adapters/outbound/slack/slackThreadAdapter";
+import { createOpenClawRuntime } from "./bootstrap/openclawRuntimeFactory";
 import { SqliteBriefingRepository } from "./repositories/sqliteBriefingRepository";
+import { SqliteOpenclawEventOutboxRepository } from "./repositories/sqliteOpenclawEventOutboxRepository";
 import { SqliteRoomSessionRepository } from "./repositories/sqliteRoomSessionRepository";
+import { SqliteRoomThreadMessageRepository } from "./repositories/sqliteRoomThreadMessageRepository";
+import { SqliteRoomWatchTargetRepository } from "./repositories/sqliteRoomWatchTargetRepository";
 import { SqliteWorkerRoundRepository } from "./repositories/sqliteWorkerRoundRepository";
-import { ROOM_APP_MESSAGES, ROOM_LOG_EVENT_NAMES } from "./shared/messages";
+import {
+  ROOM_APP_MESSAGES,
+  ROOM_LOG_EVENT_NAMES,
+  ROOM_OPENCLAW_DEFAULTS,
+  ROOM_OPENCLAW_MESSAGES
+} from "./shared/messages";
 import { createLogger, normalizeLogLevel, type LogLevel } from "./shared/logger";
+import type { RoomModeLifecycleService } from "./shared/types";
 import { LaunchRoomSessionService } from "./services/launchRoomSessionService";
 import { RunWorkerRoundStubService } from "./services/runWorkerRoundStubService";
 import { StartRoomSessionService } from "./services/startRoomSessionService";
 import { SummarizeRoomSessionService } from "./services/summarizeRoomSessionService";
+import type { OpenClawIntervalRunner } from "./services/openclaw/openClawIntervalRunner";
 
 // 런타임 필수 환경설정 모델
 interface AppEnvironment {
@@ -22,8 +34,23 @@ interface AppEnvironment {
   roomStartChannelId: string;
   roomLaunchChannelId: string;
   sqlitePath: string;
+  openClawEventsFilePath: string;
+  roomModeTtlMinutes: number;
+  roomAutoSummaryMessageThreshold: number;
+  roomAutoQuestionIntervalMinutes: number;
+  openClawOutboxDispatchIntervalMs: number;
   logLevel: LogLevel;
   port: number;
+}
+
+// 앱 내부 조립 단계에서 재사용하는 저장소 묶음
+interface AppRepositories {
+  roomSessionRepository: SqliteRoomSessionRepository;
+  briefingRepository: SqliteBriefingRepository;
+  workerRoundRepository: SqliteWorkerRoundRepository;
+  roomWatchTargetRepository: SqliteRoomWatchTargetRepository;
+  roomThreadMessageRepository: SqliteRoomThreadMessageRepository;
+  openClawEventOutboxRepository: SqliteOpenclawEventOutboxRepository;
 }
 
 // 부트스트랩 완료 후 앱이 유지해야 하는 실행 자원 묶음
@@ -32,6 +59,7 @@ interface AppRuntime {
   sqliteClient: SqliteClient;
   logger: ReturnType<typeof createLogger>;
   environment: AppEnvironment;
+  openClawSchedulers: OpenClawIntervalRunner[];
 }
 
 // 필수 환경변수를 읽고 공백/누락을 검사한다.
@@ -42,6 +70,24 @@ function readRequiredEnvironmentVariable(name: string): string {
   }
 
   return value.trim();
+}
+
+// 양수 정수 환경변수를 파싱한다.
+function parsePositiveIntegerEnvironmentVariable(
+  name: string,
+  rawValue: string | undefined,
+  defaultValue: number
+): number {
+  if (!rawValue || rawValue.trim().length === 0) {
+    return defaultValue;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(ROOM_OPENCLAW_MESSAGES.invalidPositiveInteger(name));
+  }
+
+  return parsed;
 }
 
 // PORT 환경변수를 숫자로 파싱하고 유효성을 검증한다.
@@ -66,82 +112,174 @@ function loadAppEnvironment(): AppEnvironment {
     roomStartChannelId: readRequiredEnvironmentVariable("ROOM_START_CHANNEL_ID"),
     roomLaunchChannelId: readRequiredEnvironmentVariable("ROOM_LAUNCH_CHANNEL_ID"),
     sqlitePath: readRequiredEnvironmentVariable("SQLITE_PATH"),
+    openClawEventsFilePath: process.env.OPENCLAW_EVENTS_FILE_PATH?.trim() || ROOM_OPENCLAW_DEFAULTS.eventsFilePath,
+    roomModeTtlMinutes: parsePositiveIntegerEnvironmentVariable(
+      "ROOM_MODE_TTL_MINUTES",
+      process.env.ROOM_MODE_TTL_MINUTES,
+      ROOM_OPENCLAW_DEFAULTS.modeTtlMinutes
+    ),
+    roomAutoSummaryMessageThreshold: parsePositiveIntegerEnvironmentVariable(
+      "ROOM_AUTO_SUMMARY_MESSAGE_THRESHOLD",
+      process.env.ROOM_AUTO_SUMMARY_MESSAGE_THRESHOLD,
+      ROOM_OPENCLAW_DEFAULTS.autoSummaryMessageThreshold
+    ),
+    roomAutoQuestionIntervalMinutes: parsePositiveIntegerEnvironmentVariable(
+      "ROOM_AUTO_QUESTION_INTERVAL_MINUTES",
+      process.env.ROOM_AUTO_QUESTION_INTERVAL_MINUTES,
+      ROOM_OPENCLAW_DEFAULTS.autoQuestionIntervalMinutes
+    ),
+    openClawOutboxDispatchIntervalMs: parsePositiveIntegerEnvironmentVariable(
+      "OPENCLAW_OUTBOX_DISPATCH_INTERVAL_MS",
+      process.env.OPENCLAW_OUTBOX_DISPATCH_INTERVAL_MS,
+      ROOM_OPENCLAW_DEFAULTS.outboxDispatchIntervalMs
+    ),
     logLevel: normalizeLogLevel(process.env.LOG_LEVEL),
     port: parsePort(process.env.PORT)
   };
 }
 
+// migrations 디렉터리의 SQL 파일을 이름순으로 적용한다.
+async function runAllMigrations(sqliteClient: SqliteClient): Promise<void> {
+  const migrationDirectoryPath = path.resolve(process.cwd(), "migrations");
+  const migrationFileNames = fs
+    .readdirSync(migrationDirectoryPath)
+    .filter((fileName) => fileName.endsWith(".sql"))
+    .sort();
+
+  for (const migrationFileName of migrationFileNames) {
+    const migrationPath = path.join(migrationDirectoryPath, migrationFileName);
+    await sqliteClient.runMigrations(migrationPath);
+  }
+}
+
 // SQLite 연결 및 마이그레이션을 초기화한다.
 async function initializePersistence(sqlitePath: string): Promise<SqliteClient> {
-  // 지정된 파일 경로로 SQLite 클라이언트를 생성한다.
   const sqliteClient = new SqliteClient(sqlitePath);
-
-  // DB 연결을 열고 필수 PRAGMA를 적용한다.
   await sqliteClient.connect();
-
-  // 프로젝트의 초기 스키마 마이그레이션을 적용한다.
-  const migrationPath = path.resolve(process.cwd(), "migrations", "001_init.sql");
-  await sqliteClient.runMigrations(migrationPath);
+  await runAllMigrations(sqliteClient);
   return sqliteClient;
 }
 
-// 앱 실행에 필요한 어댑터/리포지토리/서비스를 조립한다.
-// 의존성 주입을 여기서 끝내고 이후 레이어는 인터페이스만 사용한다.
-async function createAppRuntime(): Promise<AppRuntime> {
-  // .env 파일을 메모리로 로드한다.
-  loadEnvironment();
+// 저장소 구현체를 한 번에 조립한다.
+function createRepositories(sqliteClient: SqliteClient): AppRepositories {
+  const database = sqliteClient.getDatabase();
 
-  // 필수 환경값을 검증/파싱해 런타임 설정 모델로 만든다.
-  const environment = loadAppEnvironment();
+  return {
+    roomSessionRepository: new SqliteRoomSessionRepository(database),
+    briefingRepository: new SqliteBriefingRepository(database),
+    workerRoundRepository: new SqliteWorkerRoundRepository(database),
+    roomWatchTargetRepository: new SqliteRoomWatchTargetRepository(database),
+    roomThreadMessageRepository: new SqliteRoomThreadMessageRepository(database),
+    openClawEventOutboxRepository: new SqliteOpenclawEventOutboxRepository(database)
+  };
+}
 
-  // 설정된 로그 레벨로 logger 인스턴스를 생성한다.
-  const logger = createLogger(environment.logLevel);
-
-  // DB 연결/마이그레이션을 완료한 클라이언트를 준비한다.
-  const sqliteClient = await initializePersistence(environment.sqlitePath);
-
-  // 영속 계층 구현체를 조립한다.
-  const roomSessionRepository = new SqliteRoomSessionRepository(sqliteClient.getDatabase());
-  const briefingRepository = new SqliteBriefingRepository(sqliteClient.getDatabase());
-  const workerRoundRepository = new SqliteWorkerRoundRepository(sqliteClient.getDatabase());
-
-  // inbound 핸들러에 필요한 서비스 의존성을 모두 주입한다.
-  const roomCommandHandler = createRoomCommandHandler({
-    startChannelId: environment.roomStartChannelId,
-    launchChannelId: environment.roomLaunchChannelId,
-    startRoomSessionService: new StartRoomSessionService(roomSessionRepository, briefingRepository, logger),
+// room 커맨드 핸들러를 조립한다.
+function createRoomCommandRuntime(input: {
+  repositories: AppRepositories;
+  environment: AppEnvironment;
+  roomModeLifecycleService: RoomModeLifecycleService;
+  logger: ReturnType<typeof createLogger>;
+}): ReturnType<typeof createRoomCommandHandler> {
+  return createRoomCommandHandler({
+    startChannelId: input.environment.roomStartChannelId,
+    launchChannelId: input.environment.roomLaunchChannelId,
+    startRoomSessionService: new StartRoomSessionService(
+      input.repositories.roomSessionRepository,
+      input.repositories.briefingRepository,
+      input.logger,
+      {
+        roomModeLifecycleService: input.roomModeLifecycleService,
+        roomModeTtlMinutes: input.environment.roomModeTtlMinutes
+      }
+    ),
     summarizeRoomSessionService: new SummarizeRoomSessionService(
-      roomSessionRepository,
-      briefingRepository,
-      workerRoundRepository,
-      logger
+      input.repositories.roomSessionRepository,
+      input.repositories.briefingRepository,
+      input.repositories.workerRoundRepository,
+      input.logger
     ),
     launchRoomSessionService: new LaunchRoomSessionService({
-      roomSessionRepository,
-      briefingRepository,
-      workerRoundRepository,
+      roomSessionRepository: input.repositories.roomSessionRepository,
+      briefingRepository: input.repositories.briefingRepository,
+      workerRoundRepository: input.repositories.workerRoundRepository,
       runWorkerRoundStubService: new RunWorkerRoundStubService(),
-      logger
+      roomModeLifecycleService: input.roomModeLifecycleService,
+      logger: input.logger
     }),
     createSlackThreadPort: (client) => new SlackThreadAdapter(client),
+    logger: input.logger
+  });
+}
+
+// 앱 실행에 필요한 어댑터/리포지토리/서비스를 조립한다.
+async function createAppRuntime(): Promise<AppRuntime> {
+  loadEnvironment();
+  const environment = loadAppEnvironment();
+  const logger = createLogger(environment.logLevel);
+  const sqliteClient = await initializePersistence(environment.sqlitePath);
+
+  const repositories = createRepositories(sqliteClient);
+  const openClawRuntime = createOpenClawRuntime({
+    repositories,
+    environment,
     logger
   });
 
-  // Slack Bolt 앱 인스턴스를 생성하고 `/room`을 바인딩한다.
+  const roomCommandHandler = createRoomCommandRuntime({
+    repositories,
+    environment,
+    roomModeLifecycleService: openClawRuntime.roomModeLifecycleService,
+    logger
+  });
+
   const app = createBoltApp({
     botToken: environment.slackBotToken,
     appToken: environment.slackAppToken,
     roomCommandHandler,
+    roomThreadMessageHandler: openClawRuntime.roomThreadEventHandler,
     logLevel: environment.logLevel,
     logger
   });
 
-  return { app, sqliteClient, logger, environment };
+  return {
+    app,
+    sqliteClient,
+    logger,
+    environment,
+    openClawSchedulers: openClawRuntime.openClawSchedulers
+  };
+}
+
+// OpenClaw 스케줄러를 모두 시작한다.
+function startOpenClawSchedulers(runtime: AppRuntime): void {
+  for (const scheduler of runtime.openClawSchedulers) {
+    scheduler.start();
+  }
+
+  runtime.logger.info(ROOM_LOG_EVENT_NAMES.openclawSchedulerStarted, {
+    schedulerCount: runtime.openClawSchedulers.length,
+    roomModeTtlMinutes: runtime.environment.roomModeTtlMinutes,
+    summaryThreshold: runtime.environment.roomAutoSummaryMessageThreshold,
+    questionIntervalMinutes: runtime.environment.roomAutoQuestionIntervalMinutes,
+    dispatchIntervalMs: runtime.environment.openClawOutboxDispatchIntervalMs,
+    eventsFilePath: runtime.environment.openClawEventsFilePath
+  });
+}
+
+// OpenClaw 스케줄러를 모두 멈추고, 실행 중인 작업 완료를 기다린다.
+async function stopOpenClawSchedulers(runtime: AppRuntime): Promise<void> {
+  for (const scheduler of runtime.openClawSchedulers) {
+    await scheduler.stop();
+  }
+
+  runtime.logger.info(ROOM_LOG_EVENT_NAMES.openclawSchedulerStopped, {
+    schedulerCount: runtime.openClawSchedulers.length
+  });
 }
 
 // 프로세스 종료 시 리소스를 안전하게 정리하기 위한 시그널 핸들러를 등록한다.
 function registerShutdownHandlers(runtime: AppRuntime): void {
-  // 종료 로직은 신호가 여러 번 들어와도 1회만 실행되도록 보호한다.
   let shutdownInProgress = false;
 
   const resolveShutdownErrorMessage = (error: unknown): string => {
@@ -153,27 +291,19 @@ function registerShutdownHandlers(runtime: AppRuntime): void {
   };
 
   const shutdown = async (signal: "SIGINT" | "SIGTERM"): Promise<void> => {
-    // 종료 시작 로그를 먼저 남긴다.
     runtime.logger.info(ROOM_LOG_EVENT_NAMES.appStopping, { signal });
-
-    // Slack 앱 수신 루프를 중단한다.
+    await stopOpenClawSchedulers(runtime);
     await runtime.app.stop();
-
-    // DB 연결을 닫아 파일 핸들 누수를 방지한다.
     await runtime.sqliteClient.close();
-
-    // 종료 핸들러 완료 후 프로세스를 정상 종료한다.
     process.exit(0);
   };
 
   const runShutdown = (signal: "SIGINT" | "SIGTERM"): void => {
-    // 중복 신호는 무시해 리소스 정리 경쟁 상태를 방지한다.
     if (shutdownInProgress) {
       return;
     }
     shutdownInProgress = true;
 
-    // 비동기 종료 실패를 누락하지 않도록 명시적으로 catch 처리한다.
     void shutdown(signal).catch((error: unknown) => {
       runtime.logger.error(ROOM_LOG_EVENT_NAMES.appStopFailed, {
         signal,
@@ -192,18 +322,17 @@ function registerShutdownHandlers(runtime: AppRuntime): void {
 }
 
 // 서버 부트스트랩 엔트리포인트
-// runtime 생성 -> Slack app 시작 -> 시작 로그 -> 종료 훅 등록 순서로 동작한다.
+// runtime 생성 -> Slack app 시작 -> 스케줄러 시작 -> 시작 로그 -> 종료 훅 등록 순서로 동작한다.
 async function bootstrap(): Promise<void> {
-  // 런타임 의존성 조립을 먼저 완료한다.
   const runtime = await createAppRuntime();
-
-  // Slack 앱을 지정 포트로 시작한다.
   await runtime.app.start(runtime.environment.port);
+  startOpenClawSchedulers(runtime);
 
   runtime.logger.info(ROOM_LOG_EVENT_NAMES.appStarted, {
     port: runtime.environment.port,
     startChannelId: runtime.environment.roomStartChannelId,
-    launchChannelId: runtime.environment.roomLaunchChannelId
+    launchChannelId: runtime.environment.roomLaunchChannelId,
+    eventsFilePath: runtime.environment.openClawEventsFilePath
   });
 
   registerShutdownHandlers(runtime);
