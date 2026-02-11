@@ -1,8 +1,14 @@
-import { ROOM_COMMAND_NAMES, ROOM_LAUNCH_SERVICE_MESSAGES, ROOM_LOG_EVENT_NAMES } from "../shared/messages";
+import {
+  ROOM_COMMAND_NAMES,
+  ROOM_LAUNCH_SERVICE_MESSAGES,
+  ROOM_LOG_EVENT_NAMES,
+  ROOM_START_SERVICE_MESSAGES
+} from "../shared/messages";
 import { ROOM_ERROR_CODES } from "../shared/errorCodes";
 import type { Logger } from "../shared/logger";
 import { RoomCommandError } from "../shared/roomCommandError";
 import type {
+  BriefingRepository,
   RoomSession,
   RoomSessionRepository,
   RoomWorkerRound,
@@ -23,6 +29,15 @@ export interface LaunchRoomSessionInput {
 export interface LaunchRoomSessionResult {
   session: RoomSession;
   round: RoomWorkerRound;
+}
+
+// launch 서비스가 필요로 하는 의존성 묶음
+export interface LaunchRoomSessionServiceDependencies {
+  roomSessionRepository: RoomSessionRepository;
+  briefingRepository: BriefingRepository;
+  workerRoundRepository: WorkerRoundRepository;
+  runWorkerRoundStubService: RunWorkerRoundStubService;
+  logger: Logger;
 }
 
 // launch 공지에 필요한 입력 모델
@@ -50,12 +65,19 @@ function extractErrorMessage(error: unknown): string {
 // `/room launch` 유스케이스 오케스트레이션 서비스
 // 상태 검증 후 실행 스레드/워커 라운드/세션 상태 전이를 수행한다.
 export class LaunchRoomSessionService {
-  public constructor(
-    private readonly roomSessionRepository: RoomSessionRepository,
-    private readonly workerRoundRepository: WorkerRoundRepository,
-    private readonly runWorkerRoundStubService: RunWorkerRoundStubService,
-    private readonly logger: Logger
-  ) {}
+  private readonly roomSessionRepository: RoomSessionRepository;
+  private readonly briefingRepository: BriefingRepository;
+  private readonly workerRoundRepository: WorkerRoundRepository;
+  private readonly runWorkerRoundStubService: RunWorkerRoundStubService;
+  private readonly logger: Logger;
+
+  public constructor(dependencies: LaunchRoomSessionServiceDependencies) {
+    this.roomSessionRepository = dependencies.roomSessionRepository;
+    this.briefingRepository = dependencies.briefingRepository;
+    this.workerRoundRepository = dependencies.workerRoundRepository;
+    this.runWorkerRoundStubService = dependencies.runWorkerRoundStubService;
+    this.logger = dependencies.logger;
+  }
 
   // launch 실패 시 생성된 라운드를 먼저 정리한 뒤 선점 상태를 롤백한다.
   private async rollbackLaunchFailure(
@@ -64,10 +86,13 @@ export class LaunchRoomSessionService {
     runtimeContext: LaunchRuntimeContext,
     error: unknown
   ): Promise<void> {
+    let cleanupFailedError: unknown = null;
+
     if (runtimeContext.createdRoundNo !== null) {
       try {
         await this.workerRoundRepository.deleteBySessionIdAndRoundNo(sessionId, runtimeContext.createdRoundNo);
       } catch (cleanupError) {
+        cleanupFailedError = cleanupError;
         this.logger.error(ROOM_LOG_EVENT_NAMES.roomLaunchRoundCleanupFailed, {
           sessionId,
           channelId,
@@ -88,6 +113,11 @@ export class LaunchRoomSessionService {
         errorMessage: extractErrorMessage(rollbackError),
         causeErrorMessage: extractErrorMessage(error)
       });
+      throw rollbackError;
+    }
+
+    if (cleanupFailedError) {
+      throw cleanupFailedError;
     }
   }
 
@@ -119,6 +149,30 @@ export class LaunchRoomSessionService {
         estimatedCost: candidate.estimatedCost
       });
     });
+  }
+
+  // launch 가능한 PREPARED 세션인지 추가 검증한다.
+  // start 초기화가 끝나지 않은 세션은 launch를 차단한다.
+  private async ensureLaunchReady(activeSession: RoomSession): Promise<void> {
+    if (activeSession.startThreadTs === ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs) {
+      throw new RoomCommandError(ROOM_ERROR_CODES.ROOM_INVALID_STATE_TRANSITION);
+    }
+
+    const briefing = await this.briefingRepository.findBySessionId(activeSession.id);
+    if (!briefing) {
+      throw new RoomCommandError(ROOM_ERROR_CODES.ROOM_INVALID_STATE_TRANSITION);
+    }
+  }
+
+  // 다음 라운드 번호를 계산한다.
+  // 이전 라운드가 남아 있어도 중복 없이 재시도가 가능하도록 한다.
+  private async getNextRoundNo(sessionId: string): Promise<number> {
+    const latestRound = await this.workerRoundRepository.findLatestBySessionId(sessionId);
+    if (!latestRound) {
+      return 1;
+    }
+
+    return latestRound.roundNo + 1;
   }
 
   // launch 선점 직후 예약 메타데이터를 먼저 저장한다.
@@ -166,11 +220,12 @@ export class LaunchRoomSessionService {
 
     // 1차 MVP는 실제 LLM 대신 스텁 후보안(A/B/C)을 동기 생성한다.
     const candidates = this.runWorkerRoundStubService.execute(activeSession.topic);
+    const nextRoundNo = await this.getNextRoundNo(activeSession.id);
 
-    // 생성된 후보안을 round_no=1로 저장한다.
+    // 생성된 후보안을 다음 라운드 번호로 저장한다.
     const round = await this.workerRoundRepository.createRound({
       sessionId: activeSession.id,
-      roundNo: 1,
+      roundNo: nextRoundNo,
       candidates
     });
     runtimeContext.createdRoundNo = round.roundNo;
@@ -219,6 +274,7 @@ export class LaunchRoomSessionService {
     // launch 가능한 상태(PREPARED)인지 검증한다.
     // 이미 RUNNING/DECIDED면 상태 전이 규칙 위반이므로 차단한다.
     ensureLaunchableState(activeSession);
+    await this.ensureLaunchReady(activeSession);
 
     // PREPARED 세션을 원자적으로 선점해 동시 launch 경쟁을 차단한다.
     const claimed = await this.roomSessionRepository.claimPreparedSessionForLaunch(activeSession.id);

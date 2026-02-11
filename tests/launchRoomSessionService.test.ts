@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ROOM_ERROR_CODES } from "../src/shared/errorCodes";
 import { ROOM_LAUNCH_SERVICE_MESSAGES } from "../src/shared/messages";
 import { createLogger } from "../src/shared/logger";
-import type { SlackThreadPort } from "../src/shared/types";
+import type { RoomSession, SlackThreadPort } from "../src/shared/types";
 import { LaunchRoomSessionService } from "../src/services/launchRoomSessionService";
 import { RunWorkerRoundStubService } from "../src/services/runWorkerRoundStubService";
 import { createTestDatabase, type TestDatabaseContext } from "./helpers/createTestDatabase";
@@ -61,6 +61,26 @@ function extractRejectedCode<T>(result: PromiseSettledResult<T>): string | undef
   return errorWithCode.code;
 }
 
+// launch 가능한 PREPARED 세션 + 브리핑을 함께 만든다.
+async function createLaunchReadySession(context: TestDatabaseContext, topic: string): Promise<RoomSession> {
+  const session = await context.roomSessionRepository.createPreparedSession({
+    topic,
+    requestedByUserId: "U01",
+    workspaceId: "T01",
+    startChannelId: "C_START",
+    startThreadTs: "1000.0001"
+  });
+
+  await context.briefingRepository.createBriefing({
+    sessionId: session.id,
+    goal: `goal:${topic}`,
+    constraints: "constraints",
+    successCriteria: "success"
+  });
+
+  return session;
+}
+
 // `LaunchRoomSessionService` 핵심 시나리오를 검증한다.
 describe("LaunchRoomSessionService", () => {
   let context: TestDatabaseContext | null = null;
@@ -77,12 +97,13 @@ describe("LaunchRoomSessionService", () => {
   it("throws ROOM_NO_ACTIVE_SESSION when no session exists", async () => {
     // 준비: 빈 테스트 DB와 서비스 인스턴스를 만든다.
     context = await createTestDatabase();
-    const service = new LaunchRoomSessionService(
-      context.roomSessionRepository,
-      context.workerRoundRepository,
-      new RunWorkerRoundStubService(),
-      createLogger("error")
-    );
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: context.roomSessionRepository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository: context.workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      logger: createLogger("error")
+    });
 
     // 실행/검증: 세션 없이 launch를 호출하면 도메인 에러코드를 반환해야 한다.
     await expect(
@@ -117,12 +138,13 @@ describe("LaunchRoomSessionService", () => {
     });
 
     // 준비: launch 서비스 인스턴스를 만든다.
-    const service = new LaunchRoomSessionService(
-      context.roomSessionRepository,
-      context.workerRoundRepository,
-      new RunWorkerRoundStubService(),
-      createLogger("error")
-    );
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: context.roomSessionRepository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository: context.workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      logger: createLogger("error")
+    });
 
     // 실행/검증: PREPARED가 아니면 상태 전이 오류가 발생해야 한다.
     await expect(
@@ -142,21 +164,16 @@ describe("LaunchRoomSessionService", () => {
   it("moves session to RUNNING and stores first worker round", async () => {
     // 준비: launch 가능한 PREPARED 세션을 만든다.
     context = await createTestDatabase();
-    await context.roomSessionRepository.createPreparedSession({
-      topic: "Run worker round",
-      requestedByUserId: "U01",
-      workspaceId: "T01",
-      startChannelId: "C_START",
-      startThreadTs: "1000.0001"
-    });
+    await createLaunchReadySession(context, "Run worker round");
 
     // 준비: launch 서비스 인스턴스를 만든다.
-    const service = new LaunchRoomSessionService(
-      context.roomSessionRepository,
-      context.workerRoundRepository,
-      new RunWorkerRoundStubService(),
-      createLogger("error")
-    );
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: context.roomSessionRepository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository: context.workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      logger: createLogger("error")
+    });
 
     // 실행: launch를 수행한다.
     const result = await service.execute(
@@ -179,21 +196,16 @@ describe("LaunchRoomSessionService", () => {
   it("keeps launch successful even when followup thread notice fails", async () => {
     // 준비: launch 가능한 PREPARED 세션을 만든다.
     context = await createTestDatabase();
-    await context.roomSessionRepository.createPreparedSession({
-      topic: "Launch with followup failure",
-      requestedByUserId: "U01",
-      workspaceId: "T01",
-      startChannelId: "C_START",
-      startThreadTs: "1000.0001"
-    });
+    await createLaunchReadySession(context, "Launch with followup failure");
 
     // 준비: 후속 공지 실패 대역 포트를 사용하는 서비스 인스턴스를 만든다.
-    const service = new LaunchRoomSessionService(
-      context.roomSessionRepository,
-      context.workerRoundRepository,
-      new RunWorkerRoundStubService(),
-      createLogger("error")
-    );
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: context.roomSessionRepository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository: context.workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      logger: createLogger("error")
+    });
 
     // 실행: 후속 공지 실패가 발생하는 launch를 수행한다.
     const result = await service.execute(
@@ -215,21 +227,16 @@ describe("LaunchRoomSessionService", () => {
   it("rolls back launch claim when thread creation fails", async () => {
     // 준비: PREPARED 세션을 만든다.
     context = await createTestDatabase();
-    const session = await context.roomSessionRepository.createPreparedSession({
-      topic: "Launch rollback",
-      requestedByUserId: "U01",
-      workspaceId: "T01",
-      startChannelId: "C_START",
-      startThreadTs: "1000.0001"
-    });
+    const session = await createLaunchReadySession(context, "Launch rollback");
 
     // 준비: launch 서비스 인스턴스를 만든다.
-    const service = new LaunchRoomSessionService(
-      context.roomSessionRepository,
-      context.workerRoundRepository,
-      new RunWorkerRoundStubService(),
-      createLogger("error")
-    );
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: context.roomSessionRepository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository: context.workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      logger: createLogger("error")
+    });
 
     // 실행/검증: launch 스레드 생성 실패를 유도한다.
     await expect(
@@ -253,21 +260,16 @@ describe("LaunchRoomSessionService", () => {
   it("allows only one launch when requests race on the same session", async () => {
     // 준비: 동시에 접근할 단일 PREPARED 세션을 만든다.
     context = await createTestDatabase();
-    await context.roomSessionRepository.createPreparedSession({
-      topic: "Concurrent launch",
-      requestedByUserId: "U01",
-      workspaceId: "T01",
-      startChannelId: "C_START",
-      startThreadTs: "1000.0001"
-    });
+    await createLaunchReadySession(context, "Concurrent launch");
 
     // 준비: 같은 서비스 인스턴스로 동시 호출을 만든다.
-    const service = new LaunchRoomSessionService(
-      context.roomSessionRepository,
-      context.workerRoundRepository,
-      new RunWorkerRoundStubService(),
-      createLogger("error")
-    );
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: context.roomSessionRepository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository: context.workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      logger: createLogger("error")
+    });
 
     // 실행: 같은 세션을 대상으로 launch를 동시에 요청한다.
     const first = service.execute(
@@ -300,13 +302,7 @@ describe("LaunchRoomSessionService", () => {
   // launch 스레드 식별자 반영 실패가 launch 전체 실패로 전파되지 않는지 검증한다.
   it("keeps launch successful when thread metadata sync fails", async () => {
     context = await createTestDatabase();
-    await context.roomSessionRepository.createPreparedSession({
-      topic: "Launch metadata sync failure",
-      requestedByUserId: "U01",
-      workspaceId: "T01",
-      startChannelId: "C_START",
-      startThreadTs: "1000.0001"
-    });
+    await createLaunchReadySession(context, "Launch metadata sync failure");
 
     const repository = context.roomSessionRepository;
     const originalUpdateSessionToRunning = repository.updateSessionToRunning.bind(repository);
@@ -317,12 +313,13 @@ describe("LaunchRoomSessionService", () => {
       return originalUpdateSessionToRunning(input);
     };
 
-    const service = new LaunchRoomSessionService(
-      repository,
-      context.workerRoundRepository,
-      new RunWorkerRoundStubService(),
-      createLogger("error")
-    );
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: repository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository: context.workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      logger: createLogger("error")
+    });
 
     const result = await service.execute(
       {
@@ -335,5 +332,50 @@ describe("LaunchRoomSessionService", () => {
     expect(result.session.state).toBe("RUNNING");
     expect(result.session.launchThreadTs).toBe(ROOM_LAUNCH_SERVICE_MESSAGES.pendingLaunchThreadTs);
     expect(result.round.roundNo).toBe(1);
+  });
+
+  // 라운드 정리 실패가 발생해도 다음 launch 재시도가 막히지 않는지 검증한다.
+  it("allows retry launch with next round number after cleanup failure", async () => {
+    context = await createTestDatabase();
+    const session = await createLaunchReadySession(context, "Launch cleanup failure");
+
+    const workerRoundRepository = context.workerRoundRepository;
+    const originalDeleteBySessionIdAndRoundNo = workerRoundRepository.deleteBySessionIdAndRoundNo.bind(workerRoundRepository);
+    workerRoundRepository.deleteBySessionIdAndRoundNo = async () => {
+      throw new Error("round cleanup failed");
+    };
+
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: context.roomSessionRepository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      logger: createLogger("error")
+    });
+
+    await expect(
+      service.execute(
+        {
+          startChannelId: "C_START",
+          launchChannelId: "C_LAUNCH"
+        },
+        new FailingLaunchThreadSlackThreadPort()
+      )
+    ).rejects.toThrow("round cleanup failed");
+
+    const restoredAfterFailure = await context.roomSessionRepository.findById(session.id);
+    expect(restoredAfterFailure?.state).toBe("PREPARED");
+
+    workerRoundRepository.deleteBySessionIdAndRoundNo = originalDeleteBySessionIdAndRoundNo;
+
+    const retried = await service.execute(
+      {
+        startChannelId: "C_START",
+        launchChannelId: "C_LAUNCH"
+      },
+      new FakeSlackThreadPort()
+    );
+
+    expect(retried.round.roundNo).toBe(2);
   });
 });

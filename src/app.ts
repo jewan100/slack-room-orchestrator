@@ -116,12 +116,13 @@ async function createAppRuntime(): Promise<AppRuntime> {
       workerRoundRepository,
       logger
     ),
-    launchRoomSessionService: new LaunchRoomSessionService(
+    launchRoomSessionService: new LaunchRoomSessionService({
       roomSessionRepository,
+      briefingRepository,
       workerRoundRepository,
-      new RunWorkerRoundStubService(),
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
       logger
-    ),
+    }),
     createSlackThreadPort: (client) => new SlackThreadAdapter(client),
     logger
   });
