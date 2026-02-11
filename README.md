@@ -1,53 +1,89 @@
 # slack-room-orchestrator 🐾
 
-택배(메인)와 소포(워커) 에이전트들이 함께 운영하는 **범용 오케스트레이션 프로젝트**.
-
-이 레포는 특정 기능 하나에 고정되지 않고, 
-장기적으로 다양한 자동화/워크플로우/도메인 기능을 확장하는 기반 저장소를 목표로 한다.
+택배(메인)와 소포(워커) 에이전트를 Slack Slash Command로 컨트롤하는 **범용 오케스트레이션 서버**.
 
 ## 캐릭터/운영 컨셉
-- **택배 (OpenClaw 메인 에이전트)**: 검정고양이, 소포의 형님, 오케스트레이션 총괄
-- **소포 (워커 에이전트들)**: 하얀고양이들, 병렬 실행/분석/검증 담당
+- **택배 (OpenClaw 메인 에이전트)**: 검정 고양이 형님. 전체 오케스트레이션 흐름을 지휘하고, 중요한 명령을 책임진다.
+- **소포 (워커 에이전트들)**: 하얀 고양이 팀. 병렬 실행/분석/검증을 맡아 택배에게 결과를 또렷하게 전달한다.
+- 운영 톤: 귀엽게 말해도 일은 정확하게, 기록은 꼼꼼하게.
 
-## 운영 원칙
-- 제완이형은 의사결정에 집중
-- 실행/추적/검증/정리는 택배+소포가 담당
-- 프로젝트는 확장성/이식성/영속성을 우선한다
+## 프로젝트 최종 목표
+- 목표는 "회의실 기능 하나"가 아니라, Slack Slash Command를 통해 택배/소포를 제어하는 범용 서버를 만드는 것이다.
+- `/room`은 그 목표를 검증하는 1차 도메인(vertical slice)이다.
 
-## 개발 원칙 (요약)
-- 가독성 최우선 (짧은 코드보다 읽기 쉬운 코드)
-- 네이밍 엄격 (이름만 보고 역할이 드러나야 함)
-- SRP 강제 (함수/클래스 1책임)
-- 브랜치 전략: `develop` 기본, `feat/` prefix 기반 작업, `main` 직접 작업 금지
-- 브랜치명 규칙: `feat/` 등 prefix는 허용하고, prefix 이후 구간은 영어/소문자/하이픈 사용 (예: `feat/add-slack-reminder`)
-- PR/커밋 메시지: 한글 우선, PR 본문 상세 작성
-- 리뷰: Copilot 1차 + Codex 최종 통합 리뷰
-- CI(lint/typecheck/test) 통과 전 머지 금지
-- 기술 도입 시 사전 검증 필수, `latest` 사용 금지
+## 초기 기획 유지 원칙
+- 기존 기획은 삭제/교체보다 **누적 확장**을 우선한다.
+- 변경이 필요하면 기존 의도를 남기고, "추가된 결정/범위"를 문서에 쌓는 방식으로 관리한다.
+- 결정 변경은 `docs/decision/DECISION_LOG.md`에 기록한다.
 
-## 필독 문서 (에이전트 참고 순서)
+## 현재 구현 범위 (MVP 1차: room 도메인)
+- `/room start <topic>`
+- `/room summary [--brief|--full]`
+- `/room launch`
+
+미구현(2차):
+- `/room status`
+- `/room decide <A|B|C>`
+- 실 LLM 연동 (현재 `launch`는 스텁 라운드)
+
+## 런타임/기술
+- Node.js 20+
+- TypeScript
+- Slack Bolt + Socket Mode
+- SQLite (`sqlite3` + `sqlite`)
+
+## 빠른 시작
+1. 의존성 설치: `npm install`
+2. 환경변수 준비: `.env.example` 참고하여 `.env` 작성
+3. 개발 실행: `npm run dev`
+
+## 필수 환경변수
+- `SLACK_BOT_TOKEN`
+- `SLACK_APP_TOKEN`
+- `ROOM_START_CHANNEL_ID`
+- `ROOM_LAUNCH_CHANNEL_ID`
+- `SQLITE_PATH`
+
+권장:
+- `LOG_LEVEL` (`debug|info|warn|error`)
+- `PORT` (기본값 `3000`)
+
+## Slack 커맨드 모델
+- 현재: 단일 Slash Command `/room` + 서브커맨드 파싱
+- 확장 방향: `/room` 외 다른 도메인 커맨드를 모듈 단위로 추가
+- 공통 원칙: Slack 진입점은 얇게, 도메인 로직은 `service/repository/adapter` 경계로 분리
+
+## 수행 주체 모델
+- 명령 요청자: Slack에서 커맨드를 입력하는 사람(기본: 형)
+- 오케스트레이터: 택배(검정 고양이 형님, 커맨드 파싱/상태 전이/실행 조율)
+- 워커 실행자: 소포들(하얀 고양이 팀, 분석/후보안/검증 작업 담당)
+- 최종 결정자: 형(최종 선택/확정 권한)
+
+예시:
+- `/room start improve onboarding flow`
+- `/room summary --brief`
+- `/room launch`
+
+## 데이터 영속화
+- 마이그레이션: `migrations/001_init.sql`
+- 현재 저장 대상(`room` 도메인):
+  - 세션: `room_sessions`
+  - 브리핑: `room_briefings`
+  - 워커 라운드: `room_worker_rounds`
+- 재시작 후 상태 유지
+
+## 개발/검증 명령
+- `npm run lint`
+- `npm run typecheck`
+- `npm test`
+
+## 필독 문서 우선순위
 1. `JEWAN_DEV_CONSTITUTION.md`
 2. `STANDARDS.md`
-3. `SLACK_COMMAND_ENGINEERING_STANDARDS.md` (Slack command 도메인 작업 시)
+3. `SLACK_COMMAND_ENGINEERING_STANDARDS.md`
 4. `AGENTS.md`
 5. `docs/reviewer/PR_REVIEW_POLICY.md`
 6. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md`
 7. `.github/copilot-instructions.md`
 8. `.github/codex-instructions.md`
 9. `.github/PULL_REQUEST_TEMPLATE.md`
-
-## 문서 위치
-- `docs/` 하위에 리뷰 정책/체크리스트/운영 문서 정리
-
-## 커맨드 흐름 (MVP)
-1. `/room start <topic>`: 회의 주제/맥락 준비
-2. `/room launch`: 워커 토론 실행
-3. `/room status`: 진행 상태 확인
-4. `/room summary`: 현재까지 논의 요약 확인
-5. `/room decide <A|B|C>`: 최종 결정 확정
-
-## 확장 방향
-- Slack command orchestration
-- 리마인더/트래킹 자동화
-- 멀티 에이전트 워크플로우
-- 기타 생산성 자동화 도메인
