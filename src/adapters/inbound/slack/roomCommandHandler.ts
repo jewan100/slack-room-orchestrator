@@ -53,6 +53,23 @@ export interface RoomCommandHandlerDependencies {
 interface RoomCommandRuntimeContext {
   requestId: string;
   startedAt: number;
+  parsedCommand: ParsedRoomCommand | null;
+}
+
+// 파싱 결과를 기준으로 실제 명령이 실행되는 대상 채널을 계산한다.
+function resolveTargetChannelId(
+  dependencies: RoomCommandHandlerDependencies,
+  parsedCommand: ParsedRoomCommand | null
+): string | null {
+  if (!parsedCommand || parsedCommand.kind === "invalid") {
+    return null;
+  }
+
+  if (parsedCommand.kind === "launch") {
+    return dependencies.launchChannelId;
+  }
+
+  return dependencies.startChannelId;
 }
 
 // 파싱 단계에서 invalid로 분류된 요청을 사용자에게 응답하고 경고 로그를 남긴다.
@@ -72,7 +89,10 @@ async function handleInvalidCommand(
   dependencies.logger.warn(ROOM_LOG_EVENT_NAMES.roomCommandInvalid, {
     requestId: runtimeContext.requestId,
     command: request.command.text,
-    channelId: request.command.channelId,
+    invokedChannelId: request.command.channelId,
+    targetChannelId: resolveTargetChannelId(dependencies, parsedCommand),
+    startChannelId: dependencies.startChannelId,
+    launchChannelId: dependencies.launchChannelId,
     errorCode: parsedCommand.code,
     elapsedMs: Date.now() - runtimeContext.startedAt
   });
@@ -181,14 +201,16 @@ async function handleParsedCommand(
 function logCommandCompletion(
   dependencies: RoomCommandHandlerDependencies,
   request: RoomCommandRequest,
-  requestId: string,
-  startedAt: number
+  runtimeContext: RoomCommandRuntimeContext
 ): void {
   dependencies.logger.info(ROOM_LOG_EVENT_NAMES.roomCommandCompleted, {
-    requestId,
-    channelId: request.command.channelId,
+    requestId: runtimeContext.requestId,
+    invokedChannelId: request.command.channelId,
+    targetChannelId: resolveTargetChannelId(dependencies, runtimeContext.parsedCommand),
+    startChannelId: dependencies.startChannelId,
+    launchChannelId: dependencies.launchChannelId,
     command: request.command.text,
-    elapsedMs: Date.now() - startedAt
+    elapsedMs: Date.now() - runtimeContext.startedAt
   });
 }
 
@@ -205,7 +227,10 @@ async function respondAndLogFailure(
   // 장애 분석에 필요한 컨텍스트를 포함해 오류 로그를 남긴다.
   dependencies.logger.error(ROOM_LOG_EVENT_NAMES.roomCommandFailed, {
     requestId: runtimeContext.requestId,
-    channelId: request.command.channelId,
+    invokedChannelId: request.command.channelId,
+    targetChannelId: resolveTargetChannelId(dependencies, runtimeContext.parsedCommand),
+    startChannelId: dependencies.startChannelId,
+    launchChannelId: dependencies.launchChannelId,
     command: request.command.text,
     errorCode: normalizedError.code,
     errorMessage: normalizedError.message,
@@ -229,7 +254,8 @@ export function createRoomCommandHandler(
     // 요청 단위 상관관계를 위해 requestId와 시작시각을 즉시 생성한다.
     const runtimeContext: RoomCommandRuntimeContext = {
       requestId: randomUUID(),
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      parsedCommand: null
     };
 
     // Slack 3초 제한을 맞추기 위해 ack를 가장 먼저 호출한다.
@@ -237,16 +263,11 @@ export function createRoomCommandHandler(
 
     try {
       // 명령 텍스트를 파싱해 kind 기반 처리로 넘긴다.
-      const parsedCommand = parseRoomCommand(request.command.text);
-      await handleParsedCommand(dependencies, request, parsedCommand, runtimeContext);
+      runtimeContext.parsedCommand = parseRoomCommand(request.command.text);
+      await handleParsedCommand(dependencies, request, runtimeContext.parsedCommand, runtimeContext);
 
       // 정상 완료 로그를 마지막에 기록한다.
-      logCommandCompletion(
-        dependencies,
-        request,
-        runtimeContext.requestId,
-        runtimeContext.startedAt
-      );
+      logCommandCompletion(dependencies, request, runtimeContext);
     } catch (error) {
       // 어떤 단계에서 실패해도 공통 실패 처리 경로를 사용한다.
       await respondAndLogFailure(dependencies, request, error, runtimeContext);

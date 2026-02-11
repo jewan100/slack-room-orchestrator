@@ -57,6 +57,11 @@ export const ROOM_COMMAND_MESSAGES = {
 // start 유스케이스에서 사용하는 문구
 export const ROOM_START_SERVICE_MESSAGES = {
   pendingStartThreadTs: "PENDING_START_THREAD_TS",
+  sqliteConstraintErrorCode: "SQLITE_CONSTRAINT",
+  sqliteConstraintUniqueErrorCode: "SQLITE_CONSTRAINT_UNIQUE",
+  sqliteConstraintErrno: 19,
+  activeSessionConstraintIndexName: "idx_room_sessions_active_per_channel",
+  activeSessionConstraintColumnName: "room_sessions.start_channel_id",
   preparedThreadText: (topic: string): string => `회의 세션을 준비했습니다.\n주제: ${topic}`,
   briefingGoal: (topic: string): string => `다음 주제의 최적 실행 경로를 정리합니다: ${topic}`,
   briefingConstraints: "실행 전 제약사항(범위, 일정, 자원)을 정리합니다.",
@@ -162,6 +167,7 @@ export const ROOM_LOG_EVENT_NAMES = {
   roomCommandFailed: "room.command.failed",
   roomStartCompleted: "room.start.completed",
   roomStartFollowupNoticeFailed: "room.start.followup_notice_failed",
+  roomStartReservationRollbackSkipped: "room.start.reservation_rollback_skipped",
   roomStartReservationRollbackFailed: "room.start.reservation_rollback_failed",
   roomSummaryCompleted: "room.summary.completed",
   roomLaunchCompleted: "room.launch.completed",

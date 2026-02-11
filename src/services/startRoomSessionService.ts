@@ -18,6 +18,13 @@ export interface StartRoomSessionResult {
   session: RoomSession;
 }
 
+// sqlite 예외 객체에서 사용할 수 있는 구조화 필드 타입
+interface SqliteConstraintErrorLike {
+  code?: unknown;
+  errno?: unknown;
+  message?: unknown;
+}
+
 // unknown 에러를 로그용 문자열로 정규화한다.
 function extractErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -27,15 +34,45 @@ function extractErrorMessage(error: unknown): string {
   return ROOM_START_SERVICE_MESSAGES.followupNoticeUnknownError;
 }
 
+// unknown 예외에서 sqlite 구조화 필드를 안전하게 추출한다.
+function extractSqliteConstraintErrorMetadata(error: unknown): {
+  code: string | null;
+  errno: number | null;
+  message: string | null;
+} {
+  if (typeof error !== "object" || error === null) {
+    return {
+      code: null,
+      errno: null,
+      message: null
+    };
+  }
+
+  const typedError = error as SqliteConstraintErrorLike;
+  return {
+    code: typeof typedError.code === "string" ? typedError.code : null,
+    errno: typeof typedError.errno === "number" ? typedError.errno : null,
+    message: typeof typedError.message === "string" ? typedError.message : null
+  };
+}
+
 // start 동시 요청으로 발생하는 활성 세션 unique 충돌 여부를 판별한다.
 function isActiveSessionConstraintError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
+  const metadata = extractSqliteConstraintErrorMetadata(error);
+
+  // sqlite 에러 코드/errno를 먼저 확인해 unique 제약 충돌 후보를 좁힌다.
+  const isConstraintError =
+    metadata.code === ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrorCode ||
+    metadata.code === ROOM_START_SERVICE_MESSAGES.sqliteConstraintUniqueErrorCode ||
+    metadata.errno === ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrno;
+
+  if (!isConstraintError || !metadata.message) {
     return false;
   }
 
   return (
-    error.message.includes("idx_room_sessions_active_per_channel") ||
-    error.message.includes("UNIQUE constraint failed: room_sessions.start_channel_id")
+    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeSessionConstraintIndexName) ||
+    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeSessionConstraintColumnName)
   );
 }
 
@@ -71,7 +108,20 @@ export class StartRoomSessionService {
   // 정리 실패는 원인 추적용 오류 로그로만 남기고 원래 예외를 유지한다.
   private async rollbackReservedSession(sessionId: string, channelId: string, error: unknown): Promise<void> {
     try {
-      await this.roomSessionRepository.deleteById(sessionId);
+      const deleted = await this.roomSessionRepository.deleteReservedPreparedSession({
+        sessionId,
+        expectedStartThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+      });
+
+      // 예약 상태가 이미 변경된 경우는 삭제를 건너뛰고 경고 로그로만 남긴다.
+      if (!deleted) {
+        this.logger.warn(ROOM_LOG_EVENT_NAMES.roomStartReservationRollbackSkipped, {
+          sessionId,
+          channelId,
+          command: ROOM_COMMAND_NAMES.start,
+          causeErrorMessage: extractErrorMessage(error)
+        });
+      }
     } catch (rollbackError) {
       this.logger.error(ROOM_LOG_EVENT_NAMES.roomStartReservationRollbackFailed, {
         sessionId,

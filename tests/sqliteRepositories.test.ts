@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { ROOM_SQLITE_MESSAGES } from "../src/shared/messages";
+import { ROOM_SQLITE_MESSAGES, ROOM_START_SERVICE_MESSAGES } from "../src/shared/messages";
 import type { WorkerCandidate } from "../src/shared/types";
 import { createTestDatabase, type TestDatabaseContext } from "./helpers/createTestDatabase";
 
@@ -108,6 +108,118 @@ describe("sqlite repositories", () => {
     expect(briefing?.goal).toBe("Validate persistence");
     expect(latestRound?.roundNo).toBe(1);
     expect(latestRound?.candidates[0]?.option).toBe("A");
+  });
+
+  // 예약된 PREPARED 세션 조건 삭제가 성공하는지 검증한다.
+  it("deletes only reserved prepared session when marker matches", async () => {
+    context = await createTestDatabase();
+    const session = await context.roomSessionRepository.createPreparedSession({
+      topic: "Reserved session delete",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START",
+      startThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+    });
+
+    const deleted = await context.roomSessionRepository.deleteReservedPreparedSession({
+      sessionId: session.id,
+      expectedStartThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+    });
+
+    const loaded = await context.roomSessionRepository.findById(session.id);
+    expect(deleted).toBe(true);
+    expect(loaded).toBeNull();
+  });
+
+  // 예약 삭제는 이미 RUNNING으로 선점된 세션을 지우지 않는지 검증한다.
+  it("does not delete session when reservation state already changed", async () => {
+    context = await createTestDatabase();
+    const session = await context.roomSessionRepository.createPreparedSession({
+      topic: "Do not delete running session",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START",
+      startThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+    });
+
+    await context.roomSessionRepository.claimPreparedSessionForLaunch(session.id);
+
+    const deleted = await context.roomSessionRepository.deleteReservedPreparedSession({
+      sessionId: session.id,
+      expectedStartThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+    });
+
+    const loaded = await context.roomSessionRepository.findById(session.id);
+    expect(deleted).toBe(false);
+    expect(loaded?.state).toBe("RUNNING");
+  });
+
+  // RUNNING 메타데이터 갱신은 선점(claim) 이후에만 허용되는지 검증한다.
+  it("updates running metadata only when session is already claimed", async () => {
+    context = await createTestDatabase();
+    const session = await context.roomSessionRepository.createPreparedSession({
+      topic: "Running update guard",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START",
+      startThreadTs: "1000.0001"
+    });
+
+    await expect(
+      context.roomSessionRepository.updateSessionToRunning({
+        sessionId: session.id,
+        launchChannelId: "C_LAUNCH",
+        launchThreadTs: "2000.0001"
+      })
+    ).rejects.toThrow(ROOM_SQLITE_MESSAGES.updateSessionToRunningFailed);
+
+    await context.roomSessionRepository.claimPreparedSessionForLaunch(session.id);
+
+    const updated = await context.roomSessionRepository.updateSessionToRunning({
+      sessionId: session.id,
+      launchChannelId: "C_LAUNCH",
+      launchThreadTs: "2000.0001"
+    });
+
+    expect(updated.state).toBe("RUNNING");
+    expect(updated.launchChannelId).toBe("C_LAUNCH");
+    expect(updated.launchThreadTs).toBe("2000.0001");
+  });
+
+  // 같은 세션에 동일 round_no를 중복 저장하지 못하는지 검증한다.
+  it("blocks duplicate round number within same session", async () => {
+    context = await createTestDatabase();
+    const session = await context.roomSessionRepository.createPreparedSession({
+      topic: "Round uniqueness",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START",
+      startThreadTs: "1000.0001"
+    });
+
+    const candidates: WorkerCandidate[] = [
+      {
+        option: "A",
+        summary: "Option A summary",
+        pros: ["Fast"],
+        risk: "Scope creep",
+        estimatedCost: "1 day"
+      }
+    ];
+
+    await context.workerRoundRepository.createRound({
+      sessionId: session.id,
+      roundNo: 1,
+      candidates
+    });
+
+    await expect(
+      context.workerRoundRepository.createRound({
+        sessionId: session.id,
+        roundNo: 1,
+        candidates
+      })
+    ).rejects.toThrow();
   });
 
   // 손상된 candidates_json을 읽을 때 명시적 파싱 오류가 발생하는지 검증한다.

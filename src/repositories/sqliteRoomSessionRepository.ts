@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { SqliteDatabase } from "../adapters/outbound/persistence/sqliteClient";
 import { ROOM_SQLITE_MESSAGES } from "../shared/messages";
 import type {
+  CandidateOption,
   CreatePreparedSessionInput,
+  DeleteReservedPreparedSessionInput,
   RoomSession,
   RoomSessionRepository,
   UpdatePreparedSessionStartThreadInput,
@@ -20,7 +22,7 @@ interface RoomSessionRow {
   start_thread_ts: string;
   launch_channel_id: string | null;
   launch_thread_ts: string | null;
-  decided_option: string | null;
+  decided_option: CandidateOption | null;
   created_at: string;
   updated_at: string;
 }
@@ -175,7 +177,7 @@ export class SqliteRoomSessionRepository implements RoomSessionRepository {
     const now = new Date().toISOString();
 
     // 상태/launch 채널/launch 스레드/updated_at을 한 번에 갱신한다.
-    await this.db.run(
+    const result = await this.db.run(
       `
       UPDATE room_sessions
       SET state = 'RUNNING',
@@ -183,12 +185,17 @@ export class SqliteRoomSessionRepository implements RoomSessionRepository {
           launch_thread_ts = ?,
           updated_at = ?
       WHERE id = ?
+        AND state = 'RUNNING'
     `,
       input.launchChannelId,
       input.launchThreadTs,
       now,
       input.sessionId
     );
+
+    if (result.changes !== 1) {
+      throw new Error(ROOM_SQLITE_MESSAGES.updateSessionToRunningFailed);
+    }
 
     // 갱신 결과를 즉시 재조회해 상위 레이어에서 일관된 모델을 사용하게 한다.
     const updated = await this.findById(input.sessionId);
@@ -197,6 +204,27 @@ export class SqliteRoomSessionRepository implements RoomSessionRepository {
     }
 
     return updated;
+  }
+
+  // start 예약 단계에서 만든 PREPARED 세션만 조건부로 삭제한다.
+  // 상태가 이미 바뀐 세션(RUNNING 등)은 삭제하지 않고 false를 반환한다.
+  public async deleteReservedPreparedSession(input: DeleteReservedPreparedSessionInput): Promise<boolean> {
+    const result = await this.db.run(
+      `
+      DELETE FROM room_sessions
+      WHERE id = ?
+        AND state = 'PREPARED'
+        AND start_thread_ts = ?
+    `,
+      input.sessionId,
+      input.expectedStartThreadTs
+    );
+
+    if (typeof result.changes !== "number") {
+      throw new Error(ROOM_SQLITE_MESSAGES.deleteSessionFailed);
+    }
+
+    return result.changes === 1;
   }
 
   // 세션 ID 기준으로 단건 삭제한다.

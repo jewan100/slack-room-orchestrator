@@ -18,7 +18,7 @@ export interface RoomSession {
   startThreadTs: string;
   launchChannelId: string | null;
   launchThreadTs: string | null;
-  decidedOption: string | null;
+  decidedOption: CandidateOption | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -73,6 +73,12 @@ export interface UpdatePreparedSessionStartThreadInput {
   startThreadTs: string;
 }
 
+// 예약된 PREPARED 세션만 안전하게 삭제할 때 사용하는 입력 모델
+export interface DeleteReservedPreparedSessionInput {
+  sessionId: string;
+  expectedStartThreadTs: string;
+}
+
 // 브리핑 생성용 저장소 입력 모델
 export interface CreateBriefingInput {
   sessionId: string;
@@ -96,6 +102,7 @@ export interface RoomSessionRepository {
   updatePreparedSessionStartThread(input: UpdatePreparedSessionStartThreadInput): Promise<RoomSession>;
   claimPreparedSessionForLaunch(sessionId: string): Promise<boolean>;
   rollbackLaunchClaim(sessionId: string): Promise<void>;
+  deleteReservedPreparedSession(input: DeleteReservedPreparedSessionInput): Promise<boolean>;
   updateSessionToRunning(input: UpdateSessionToRunningInput): Promise<RoomSession>;
   deleteById(sessionId: string): Promise<void>;
   findById(sessionId: string): Promise<RoomSession | null>;

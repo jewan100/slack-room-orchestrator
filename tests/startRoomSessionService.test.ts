@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ROOM_ERROR_CODES } from "../src/shared/errorCodes";
+import { ROOM_START_SERVICE_MESSAGES } from "../src/shared/messages";
 import { createLogger } from "../src/shared/logger";
 import type { SlackThreadPort } from "../src/shared/types";
 import { StartRoomSessionService } from "../src/services/startRoomSessionService";
@@ -119,6 +120,43 @@ describe("StartRoomSessionService", () => {
 
     // 검증: 차단된 두 번째 요청은 추가 스레드를 생성하지 않아야 한다.
     expect(slackThreadPort.createdThreads.length).toBe(1);
+  });
+
+  // sqlite unique 제약 충돌(code/errno)을 ROOM_ALREADY_RUNNING으로 매핑하는지 검증한다.
+  it("maps sqlite unique metadata to ROOM_ALREADY_RUNNING", async () => {
+    context = await createTestDatabase();
+    const repository = context.roomSessionRepository;
+
+    // createPreparedSession 단계에서 sqlite unique 충돌을 강제로 발생시킨다.
+    repository.createPreparedSession = async () => {
+      const constraintError = new Error(ROOM_START_SERVICE_MESSAGES.activeSessionConstraintIndexName) as Error & {
+        code: string;
+        errno: number;
+      };
+      constraintError.code = ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrorCode;
+      constraintError.errno = ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrno;
+      throw constraintError;
+    };
+
+    const service = new StartRoomSessionService(
+      repository,
+      context.briefingRepository,
+      createLogger("error")
+    );
+
+    await expect(
+      service.execute(
+        {
+          topic: "Race condition",
+          requestedByUserId: "U01",
+          workspaceId: "T01",
+          startChannelId: "C_START"
+        },
+        new FakeSlackThreadPort()
+      )
+    ).rejects.toMatchObject({
+      code: ROOM_ERROR_CODES.ROOM_ALREADY_RUNNING
+    });
   });
 
   // 후속 안내 전송 실패가 start 성공 결과를 뒤집지 않는지 검증한다.

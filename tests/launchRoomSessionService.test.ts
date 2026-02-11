@@ -108,6 +108,7 @@ describe("LaunchRoomSessionService", () => {
       startChannelId: "C_START",
       startThreadTs: "1000.0001"
     });
+    await context.roomSessionRepository.claimPreparedSessionForLaunch(session.id);
     await context.roomSessionRepository.updateSessionToRunning({
       sessionId: session.id,
       launchChannelId: "C_LAUNCH",

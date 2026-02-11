@@ -42,5 +42,7 @@ CREATE TABLE IF NOT EXISTS room_worker_rounds (
   FOREIGN KEY (session_id) REFERENCES room_sessions(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_room_worker_rounds_session_round
+DROP INDEX IF EXISTS idx_room_worker_rounds_session_round;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_room_worker_rounds_session_round
   ON room_worker_rounds (session_id, round_no);
