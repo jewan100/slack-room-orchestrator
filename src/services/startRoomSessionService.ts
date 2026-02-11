@@ -106,12 +106,29 @@ export class StartRoomSessionService {
 
   // 보상 처리로 예약된 세션을 정리한다.
   // 정리 실패는 원인 추적용 오류 로그로만 남기고 원래 예외를 유지한다.
-  private async rollbackReservedSession(sessionId: string, channelId: string, error: unknown): Promise<void> {
+  private async rollbackReservedSession(
+    sessionId: string,
+    channelId: string,
+    error: unknown,
+    currentStartThreadTs: string
+  ): Promise<void> {
+    const rollbackCandidates = [
+      currentStartThreadTs,
+      ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+    ];
+
     try {
-      const deleted = await this.roomSessionRepository.deleteReservedPreparedSession({
-        sessionId,
-        expectedStartThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
-      });
+      let deleted = false;
+      for (const expectedStartThreadTs of rollbackCandidates) {
+        deleted = await this.roomSessionRepository.deleteReservedPreparedSession({
+          sessionId,
+          expectedStartThreadTs
+        });
+
+        if (deleted) {
+          break;
+        }
+      }
 
       // 예약 상태가 이미 변경된 경우는 삭제를 건너뛰고 경고 로그로만 남긴다.
       if (!deleted) {
@@ -172,6 +189,7 @@ export class StartRoomSessionService {
 
     // DB에서 PREPARED 세션을 먼저 선점해 동시 start 경쟁 구간을 축소한다.
     const reservedSession = await this.createReservedPreparedSession(input, topic);
+    let currentStartThreadTs: string = ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs;
 
     try {
       // start 채널에 준비 스레드(루트 메시지)를 만든다.
@@ -179,6 +197,7 @@ export class StartRoomSessionService {
         channelId: input.startChannelId,
         text: ROOM_START_SERVICE_MESSAGES.preparedThreadText(topic)
       });
+      currentStartThreadTs = thread.threadTs;
 
       // 예약 세션에 실제 start 스레드 식별자를 반영한다.
       const session = await this.roomSessionRepository.updatePreparedSessionStartThread({
@@ -207,7 +226,7 @@ export class StartRoomSessionService {
       return { session };
     } catch (error) {
       // start 후반 실패 시 선점된 세션을 정리해 재시도 가능 상태를 복구한다.
-      await this.rollbackReservedSession(reservedSession.id, input.startChannelId, error);
+      await this.rollbackReservedSession(reservedSession.id, input.startChannelId, error, currentStartThreadTs);
       throw error;
     }
   }

@@ -57,6 +57,23 @@ export class SqliteWorkerRoundRepository implements WorkerRoundRepository {
     return created;
   }
 
+  // 세션 + 라운드 번호 기준으로 단일 라운드를 삭제한다.
+  public async deleteBySessionIdAndRoundNo(sessionId: string, roundNo: number): Promise<void> {
+    const result = await this.db.run(
+      `
+      DELETE FROM room_worker_rounds
+      WHERE session_id = ?
+        AND round_no = ?
+    `,
+      sessionId,
+      roundNo
+    );
+
+    if (result.changes !== 1) {
+      throw new Error(ROOM_SQLITE_MESSAGES.deleteWorkerRoundFailed);
+    }
+  }
+
   // 세션 기준 최신 라운드 1건을 조회한다.
   // 후보안 배열은 JSON 문자열을 파싱해 복원한다.
   public async findLatestBySessionId(sessionId: string): Promise<RoomWorkerRound | null> {

@@ -33,6 +33,11 @@ interface LaunchRoundNoticeInput {
   candidateLines: string[];
 }
 
+// launch 실행 중 보상 처리 판단에 필요한 런타임 상태
+interface LaunchRuntimeContext {
+  createdRoundNo: number | null;
+}
+
 // unknown 에러를 로그용 문자열로 정규화한다.
 function extractErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -52,8 +57,27 @@ export class LaunchRoomSessionService {
     private readonly logger: Logger
   ) {}
 
-  // launch 선점 이후 실패 시 PREPARED로 롤백한다.
-  private async rollbackLaunchClaim(sessionId: string, channelId: string, error: unknown): Promise<void> {
+  // launch 실패 시 생성된 라운드를 먼저 정리한 뒤 선점 상태를 롤백한다.
+  private async rollbackLaunchFailure(
+    sessionId: string,
+    channelId: string,
+    runtimeContext: LaunchRuntimeContext,
+    error: unknown
+  ): Promise<void> {
+    if (runtimeContext.createdRoundNo !== null) {
+      try {
+        await this.workerRoundRepository.deleteBySessionIdAndRoundNo(sessionId, runtimeContext.createdRoundNo);
+      } catch (cleanupError) {
+        this.logger.error(ROOM_LOG_EVENT_NAMES.roomLaunchRoundCleanupFailed, {
+          sessionId,
+          channelId,
+          command: ROOM_COMMAND_NAMES.launch,
+          errorMessage: extractErrorMessage(cleanupError),
+          causeErrorMessage: extractErrorMessage(error)
+        });
+      }
+    }
+
     try {
       await this.roomSessionRepository.rollbackLaunchClaim(sessionId);
     } catch (rollbackError) {
@@ -97,24 +121,48 @@ export class LaunchRoomSessionService {
     });
   }
 
+  // launch 선점 직후 예약 메타데이터를 먼저 저장한다.
+  private async reserveLaunchMetadata(sessionId: string, launchChannelId: string): Promise<RoomSession> {
+    return this.roomSessionRepository.updateSessionToRunning({
+      sessionId,
+      launchChannelId,
+      launchThreadTs: ROOM_LAUNCH_SERVICE_MESSAGES.pendingLaunchThreadTs
+    });
+  }
+
+  // launch 스레드 식별자 반영은 best-effort로 처리한다.
+  private async syncLaunchThreadMetadata(
+    sessionId: string,
+    launchChannelId: string,
+    launchThreadTs: string,
+    errorContext: { channelId: string }
+  ): Promise<RoomSession | null> {
+    try {
+      return await this.roomSessionRepository.updateSessionToRunning({
+        sessionId,
+        launchChannelId,
+        launchThreadTs
+      });
+    } catch (error) {
+      this.logger.warn(ROOM_LOG_EVENT_NAMES.roomLaunchThreadMetadataUpdateFailed, {
+        sessionId,
+        channelId: errorContext.channelId,
+        command: ROOM_COMMAND_NAMES.launch,
+        errorMessage: extractErrorMessage(error)
+      });
+      return null;
+    }
+  }
+
   // launch 핵심 단계를 실행하고 결과를 조립한다.
   private async runLaunchCore(
     input: LaunchRoomSessionInput,
     activeSession: RoomSession,
+    runtimeContext: LaunchRuntimeContext,
     slackThreadPort: SlackThreadPort
   ): Promise<LaunchRoomSessionResult> {
-    // launch 채널에 실행 스레드를 생성한다.
-    const launchThread = await slackThreadPort.createThread({
-      channelId: input.launchChannelId,
-      text: ROOM_LAUNCH_SERVICE_MESSAGES.launchThreadText(activeSession.topic)
-    });
-
-    // 세션에 실제 launch 스레드 식별자를 기록한다.
-    const updatedSession = await this.roomSessionRepository.updateSessionToRunning({
-      sessionId: activeSession.id,
-      launchChannelId: input.launchChannelId,
-      launchThreadTs: launchThread.threadTs
-    });
+    // launch 스레드 생성 전에 RUNNING 예약 메타데이터를 먼저 저장한다.
+    const reservedSession = await this.reserveLaunchMetadata(activeSession.id, input.launchChannelId);
 
     // 1차 MVP는 실제 LLM 대신 스텁 후보안(A/B/C)을 동기 생성한다.
     const candidates = this.runWorkerRoundStubService.execute(activeSession.topic);
@@ -125,23 +173,35 @@ export class LaunchRoomSessionService {
       roundNo: 1,
       candidates
     });
+    runtimeContext.createdRoundNo = round.roundNo;
+
+    // DB 상태가 준비된 뒤 launch 채널에 실행 스레드를 생성한다.
+    const launchThread = await slackThreadPort.createThread({
+      channelId: input.launchChannelId,
+      text: ROOM_LAUNCH_SERVICE_MESSAGES.launchThreadText(activeSession.topic)
+    });
+
+    const syncedSession = await this.syncLaunchThreadMetadata(activeSession.id, input.launchChannelId, launchThread.threadTs, {
+      channelId: input.launchChannelId
+    });
+    const launchSession = syncedSession ?? reservedSession;
 
     await this.postLaunchRoundNotice(slackThreadPort, {
       channelId: input.launchChannelId,
       threadTs: launchThread.threadTs,
-      sessionId: updatedSession.id,
+      sessionId: launchSession.id,
       candidateLines: this.buildCandidateLines(candidates)
     });
 
     // 운영 로그를 남겨 세션 상태 전이와 실행 채널을 추적한다.
     this.logger.info(ROOM_LOG_EVENT_NAMES.roomLaunchCompleted, {
-      sessionId: updatedSession.id,
+      sessionId: launchSession.id,
       channelId: input.launchChannelId,
       command: ROOM_COMMAND_NAMES.launch
     });
 
     return {
-      session: updatedSession,
+      session: launchSession,
       round
     };
   }
@@ -166,11 +226,15 @@ export class LaunchRoomSessionService {
       throw new RoomCommandError(ROOM_ERROR_CODES.ROOM_INVALID_STATE_TRANSITION);
     }
 
+    const runtimeContext: LaunchRuntimeContext = {
+      createdRoundNo: null
+    };
+
     try {
-      return await this.runLaunchCore(input, activeSession, slackThreadPort);
+      return await this.runLaunchCore(input, activeSession, runtimeContext, slackThreadPort);
     } catch (error) {
       // launch 핵심 단계 실패 시 선점 상태를 롤백해 재시도를 가능하게 만든다.
-      await this.rollbackLaunchClaim(activeSession.id, input.launchChannelId, error);
+      await this.rollbackLaunchFailure(activeSession.id, input.launchChannelId, runtimeContext, error);
       throw error;
     }
   }

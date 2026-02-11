@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ROOM_ERROR_CODES } from "../src/shared/errorCodes";
+import { ROOM_LAUNCH_SERVICE_MESSAGES } from "../src/shared/messages";
 import { createLogger } from "../src/shared/logger";
 import type { SlackThreadPort } from "../src/shared/types";
 import { LaunchRoomSessionService } from "../src/services/launchRoomSessionService";
@@ -243,7 +244,9 @@ describe("LaunchRoomSessionService", () => {
 
     // 검증: 선점된 세션이 PREPARED로 되돌아와야 재시도가 가능하다.
     const restored = await context.roomSessionRepository.findById(session.id);
+    const latestRound = await context.workerRoundRepository.findLatestBySessionId(session.id);
     expect(restored?.state).toBe("PREPARED");
+    expect(latestRound).toBeNull();
   });
 
   // 동시 launch 요청에서 1건만 성공하고 나머지는 상태 전이 오류로 차단되는지 검증한다.
@@ -292,5 +295,45 @@ describe("LaunchRoomSessionService", () => {
 
     const rejected = results.find((result) => result.status === "rejected");
     expect(rejected ? extractRejectedCode(rejected) : undefined).toBe(ROOM_ERROR_CODES.ROOM_INVALID_STATE_TRANSITION);
+  });
+
+  // launch 스레드 식별자 반영 실패가 launch 전체 실패로 전파되지 않는지 검증한다.
+  it("keeps launch successful when thread metadata sync fails", async () => {
+    context = await createTestDatabase();
+    await context.roomSessionRepository.createPreparedSession({
+      topic: "Launch metadata sync failure",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START",
+      startThreadTs: "1000.0001"
+    });
+
+    const repository = context.roomSessionRepository;
+    const originalUpdateSessionToRunning = repository.updateSessionToRunning.bind(repository);
+    repository.updateSessionToRunning = async (input) => {
+      if (input.launchThreadTs !== ROOM_LAUNCH_SERVICE_MESSAGES.pendingLaunchThreadTs) {
+        throw new Error("metadata sync failed");
+      }
+      return originalUpdateSessionToRunning(input);
+    };
+
+    const service = new LaunchRoomSessionService(
+      repository,
+      context.workerRoundRepository,
+      new RunWorkerRoundStubService(),
+      createLogger("error")
+    );
+
+    const result = await service.execute(
+      {
+        startChannelId: "C_START",
+        launchChannelId: "C_LAUNCH"
+      },
+      new FakeSlackThreadPort()
+    );
+
+    expect(result.session.state).toBe("RUNNING");
+    expect(result.session.launchThreadTs).toBe(ROOM_LAUNCH_SERVICE_MESSAGES.pendingLaunchThreadTs);
+    expect(result.round.roundNo).toBe(1);
   });
 });

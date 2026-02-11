@@ -218,4 +218,36 @@ describe("StartRoomSessionService", () => {
     const activeSession = await context.roomSessionRepository.findActiveSessionByStartChannel("C_START");
     expect(activeSession).toBeNull();
   });
+
+  // 브리핑 저장 실패 시에도 PREPARED 세션이 남지 않도록 롤백되는지 검증한다.
+  it("rolls back reserved session when briefing save fails after thread update", async () => {
+    context = await createTestDatabase();
+    const repository = context.briefingRepository;
+
+    // 스레드 생성/세션 스레드 갱신 이후 단계에서 실패를 강제로 유도한다.
+    repository.createBriefing = async () => {
+      throw new Error("briefing save failed");
+    };
+
+    const service = new StartRoomSessionService(
+      context.roomSessionRepository,
+      repository,
+      createLogger("error")
+    );
+
+    await expect(
+      service.execute(
+        {
+          topic: "Start with briefing failure",
+          requestedByUserId: "U01",
+          workspaceId: "T01",
+          startChannelId: "C_START"
+        },
+        new FakeSlackThreadPort()
+      )
+    ).rejects.toThrow("briefing save failed");
+
+    const activeSession = await context.roomSessionRepository.findActiveSessionByStartChannel("C_START");
+    expect(activeSession).toBeNull();
+  });
 });

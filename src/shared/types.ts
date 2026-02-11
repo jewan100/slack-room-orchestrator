@@ -115,6 +115,7 @@ export interface BriefingRepository {
 
 export interface WorkerRoundRepository {
   createRound(input: CreateWorkerRoundInput): Promise<RoomWorkerRound>;
+  deleteBySessionIdAndRoundNo(sessionId: string, roundNo: number): Promise<void>;
   findLatestBySessionId(sessionId: string): Promise<RoomWorkerRound | null>;
 }
 

@@ -172,6 +172,8 @@ export const ROOM_LOG_EVENT_NAMES = {
   roomSummaryCompleted: "room.summary.completed",
   roomLaunchCompleted: "room.launch.completed",
   roomLaunchFollowupNoticeFailed: "room.launch.followup_notice_failed",
+  roomLaunchThreadMetadataUpdateFailed: "room.launch.thread_metadata_update_failed",
+  roomLaunchRoundCleanupFailed: "room.launch.round_cleanup_failed",
   roomLaunchClaimRollbackFailed: "room.launch.claim_rollback_failed",
   appStopping: "slack-room-orchestrator.stop",
   appStopFailed: "slack-room-orchestrator.stop_failed",
@@ -187,6 +189,7 @@ export const ROOM_SQLITE_MESSAGES = {
   rollbackLaunchClaimFailed: "launch 선점 롤백에 실패했습니다.",
   updateSessionToRunningFailed: "세션 상태를 RUNNING으로 변경하는 데 실패했습니다.",
   deleteSessionFailed: "세션 삭제에 실패했습니다.",
+  deleteWorkerRoundFailed: "워커 라운드 삭제에 실패했습니다.",
   createBriefingFailed: "브리핑 생성에 실패했습니다.",
   createWorkerRoundFailed: "워커 라운드 생성에 실패했습니다.",
   parseWorkerRoundCandidatesFailed: "워커 라운드 후보안 파싱에 실패했습니다."
