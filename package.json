@@ -1,0 +1,36 @@
+{
+  "name": "slack-room-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Slack slash command orchestration server",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/app.ts",
+    "start": "node dist/app.js",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@slack/bolt": "3.17.1",
+    "dotenv": "16.4.5",
+    "sqlite": "5.1.1",
+    "sqlite3": "5.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.0",
+    "@typescript-eslint/eslint-plugin": "7.16.1",
+    "@typescript-eslint/parser": "7.16.1",
+    "eslint": "8.57.0",
+    "tsx": "4.21.0",
+    "typescript": "5.6.3",
+    "vitest": "4.0.18"
+  },
+  "overrides": {
+    "tar": "7.5.7"
+  }
+}

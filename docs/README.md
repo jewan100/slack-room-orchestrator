@@ -4,7 +4,7 @@
 
 ## 1) Owner (결정자)
 - `owner/PROJECT_CHARTER.md`
-- `owner/ROADMAP_SPRINT_001.md`
+- `owner/PROJECT_TODO.md`
 
 ## 2) Developer (개발자/에이전트)
 - `developer/STANDARDS.md`
