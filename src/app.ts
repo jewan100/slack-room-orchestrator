@@ -1,10 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
 import { config as loadEnvironment } from "dotenv";
 import type { App } from "@slack/bolt";
 import { createBoltApp } from "./adapters/inbound/slack/boltAppFactory";
 import { createRoomCommandHandler } from "./adapters/inbound/slack/roomCommandHandler";
 import { SqliteClient } from "./adapters/outbound/persistence/sqliteClient";
+import { runAllMigrations } from "./adapters/outbound/persistence/runAllMigrations";
 import { SlackThreadAdapter } from "./adapters/outbound/slack/slackThreadAdapter";
 import { createOpenClawRuntime } from "./bootstrap/openclawRuntimeFactory";
 import { SqliteBriefingRepository } from "./repositories/sqliteBriefingRepository";
@@ -136,20 +135,6 @@ function loadAppEnvironment(): AppEnvironment {
     logLevel: normalizeLogLevel(process.env.LOG_LEVEL),
     port: parsePort(process.env.PORT)
   };
-}
-
-// migrations 디렉터리의 SQL 파일을 이름순으로 적용한다.
-async function runAllMigrations(sqliteClient: SqliteClient): Promise<void> {
-  const migrationDirectoryPath = path.resolve(process.cwd(), "migrations");
-  const migrationFileNames = fs
-    .readdirSync(migrationDirectoryPath)
-    .filter((fileName) => fileName.endsWith(".sql"))
-    .sort();
-
-  for (const migrationFileName of migrationFileNames) {
-    const migrationPath = path.join(migrationDirectoryPath, migrationFileName);
-    await sqliteClient.runMigrations(migrationPath);
-  }
 }
 
 // SQLite 연결 및 마이그레이션을 초기화한다.

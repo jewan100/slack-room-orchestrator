@@ -445,4 +445,38 @@ describe("LaunchRoomSessionService", () => {
     expect(roomModeOffEvent).toBeDefined();
     expect(roomModeOffEvent?.payload.eventType).toBe("ROOM_MODE_OFF");
   });
+
+  // launch 시점에 planning watch target이 없어도 OFF 훅이 멱등 처리되어 launch가 성공하는지 검증한다.
+  it("keeps launch successful when planning watch target is missing", async () => {
+    context = await createTestDatabase();
+    await createLaunchReadySession(context, "Launch without watch target");
+
+    const roomModeLifecycleService = new ManageRoomModeService(
+      context.roomWatchTargetRepository,
+      context.openClawEventOutboxRepository,
+      createLogger("error")
+    );
+
+    const service = new LaunchRoomSessionService({
+      roomSessionRepository: context.roomSessionRepository,
+      briefingRepository: context.briefingRepository,
+      workerRoundRepository: context.workerRoundRepository,
+      runWorkerRoundStubService: new RunWorkerRoundStubService(),
+      roomModeLifecycleService,
+      logger: createLogger("error")
+    });
+
+    const result = await service.execute(
+      {
+        startChannelId: "C_START",
+        launchChannelId: "C_LAUNCH"
+      },
+      new FakeSlackThreadPort()
+    );
+
+    expect(result.session.state).toBe("RUNNING");
+    const pendingEvents = await context.openClawEventOutboxRepository.claimPendingEvents(new Date().toISOString(), 10);
+    const roomModeOffEvent = pendingEvents.find((event) => event.eventType === "ROOM_MODE_OFF");
+    expect(roomModeOffEvent).toBeUndefined();
+  });
 });

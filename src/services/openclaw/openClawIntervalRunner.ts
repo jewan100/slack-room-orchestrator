@@ -40,7 +40,9 @@ export class OpenClawIntervalRunner {
       return;
     }
 
-    this.runningPromise = this.task()
+    // task 호출 시 동기 throw가 발생해도 rejected promise로 흡수해 프로세스 크래시를 막는다.
+    this.runningPromise = Promise.resolve()
+      .then(() => this.task())
       .catch((error) => {
         this.onError(error);
       })

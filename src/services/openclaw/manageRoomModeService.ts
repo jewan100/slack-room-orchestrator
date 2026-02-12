@@ -1,4 +1,4 @@
-import { ROOM_LOG_EVENT_NAMES, ROOM_OPENCLAW_MESSAGES } from "../../shared/messages";
+import { ROOM_LOG_EVENT_NAMES } from "../../shared/messages";
 import type { Logger } from "../../shared/logger";
 import type {
   OpenClawEventOutboxRepository,
@@ -58,7 +58,7 @@ export class ManageRoomModeService implements RoomModeLifecycleService {
         offReason: "LAUNCH",
         reason: "watch_target_not_found"
       });
-      throw new Error(ROOM_OPENCLAW_MESSAGES.missingPlanningWatchTargetForLaunchOff);
+      return;
     }
 
     const nowIso = new Date().toISOString();
@@ -76,7 +76,7 @@ export class ManageRoomModeService implements RoomModeLifecycleService {
         offReason: "LAUNCH",
         reason: "already_off"
       });
-      throw new Error(ROOM_OPENCLAW_MESSAGES.missingPlanningWatchTargetForLaunchOff);
+      return;
     }
 
     await this.openClawEventOutboxRepository.enqueueEvent(

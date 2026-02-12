@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runAllMigrations } from "../../src/adapters/outbound/persistence/runAllMigrations";
 import { SqliteClient } from "../../src/adapters/outbound/persistence/sqliteClient";
 import { SqliteBriefingRepository } from "../../src/repositories/sqliteBriefingRepository";
 import { SqliteOpenclawEventOutboxRepository } from "../../src/repositories/sqliteOpenclawEventOutboxRepository";
@@ -19,20 +20,6 @@ export interface TestDatabaseContext {
   roomThreadMessageRepository: SqliteRoomThreadMessageRepository;
   openClawEventOutboxRepository: SqliteOpenclawEventOutboxRepository;
   cleanup: () => Promise<void>;
-}
-
-// migrations 디렉터리의 SQL 파일을 이름순으로 적용한다.
-async function runAllMigrations(sqliteClient: SqliteClient): Promise<void> {
-  const migrationDirectoryPath = path.resolve(process.cwd(), "migrations");
-  const migrationFileNames = fs
-    .readdirSync(migrationDirectoryPath)
-    .filter((fileName) => fileName.endsWith(".sql"))
-    .sort();
-
-  for (const migrationFileName of migrationFileNames) {
-    const migrationPath = path.join(migrationDirectoryPath, migrationFileName);
-    await sqliteClient.runMigrations(migrationPath);
-  }
 }
 
 // 테스트 실행마다 격리된 파일 DB를 생성한다.
