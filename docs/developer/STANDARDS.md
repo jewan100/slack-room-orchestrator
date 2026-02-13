@@ -26,7 +26,10 @@
 - 코드 스타일 상세(독자 친화형+맥락형 주석/복잡도/함수 길이/비동기 안전성)는 `JEWAN_DEV_CONSTITUTION.md` 기준 적용
 - 사용자 노출 문구/에러 문구는 중앙 카탈로그에서 관리
 
+AI 워커 작업 방식(4원칙)은 `AGENTS.md`를 따른다.
+
 ## 참조
+- `AGENTS.md`
 - `STANDARDS.md`
 - `JEWAN_DEV_CONSTITUTION.md`
 - `SLACK_COMMAND_ENGINEERING_STANDARDS.md`
