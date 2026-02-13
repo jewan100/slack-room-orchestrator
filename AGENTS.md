@@ -15,21 +15,36 @@
 
 ---
 
-## 1) 문서 우선순위 (반드시 이 순서로 참고)
+## 1) 문서 우선순위
 
-워커는 작업 시작 전 아래 순서대로 문서를 읽고 판단한다.
+### Core allowlist (기본 로드)
+워커는 작업 시작 시 아래 문서만 먼저 읽고 시작한다.
 
-1. `AGENTS.md` (AI 워커 작업 계약, 최상위 작업 지침)
-2. `JEWAN_DEV_CONSTITUTION.md` (전역 개발 헌법, 최상위 원칙)
-3. `STANDARDS.md` (레포 공통 구현/프로세스 표준)
-4. `SLACK_COMMAND_ENGINEERING_STANDARDS.md` (도메인 특화 규칙)
-5. `README.md` (현재 레포 운영 맥락/확장 방향)
-6. `docs/decision/DECISION_LOG.md` (현재 유효 기준선)
-7. `docs/reviewer/PR_REVIEW_POLICY.md` (리뷰 절차)
-8. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md` (최종 점검 항목)
-9. `.github/copilot-instructions.md` (Copilot 작업 가이드)
-10. `.github/codex-instructions.md` (Codex 최종 게이트 기준)
-11. `.github/PULL_REQUEST_TEMPLATE.md` (PR 작성 형식)
+1. `AGENTS.md`
+2. `JEWAN_DEV_CONSTITUTION.md`
+3. `STANDARDS.md`
+4. `SLACK_COMMAND_ENGINEERING_STANDARDS.md`
+5. `README.md`
+6. `docs/README.md`
+7. `docs/decision/DECISION_LOG.md`
+8. `docs/owner/PROJECT_TODO.md`
+9. `docs/ROOM_FLOW.md`
+10. `docs/developer/COMMAND_SPEC.md`
+
+추가 문서는 변경 범위에 따라 필요할 때만 읽는다.
+
+### 충돌 해결 우선순위
+문서/규칙이 충돌할 때는 아래 순서대로 판단한다.
+
+1. `AGENTS.md`
+2. `JEWAN_DEV_CONSTITUTION.md`
+3. `STANDARDS.md`
+4. `SLACK_COMMAND_ENGINEERING_STANDARDS.md`
+5. `README.md`
+6. `docs/decision/DECISION_LOG.md`
+7. `.github/copilot-instructions.md`
+8. `.github/codex-instructions.md`
+9. `.github/PULL_REQUEST_TEMPLATE.md`
 
 ### 충돌 처리 규칙
 - 문서 간 충돌 시: `CONSTITUTION > STANDARDS > 도메인 규칙 > 기타 문서`
@@ -109,7 +124,7 @@ PR 작성 시 `.github/PULL_REQUEST_TEMPLATE.md`를 따른다.
 
 표기 규칙:
 - 파일/경로/명령어는 코드 포맷으로 표기
-  - 예: `README.md`, `docs/reviewer/...`, `npm run test`
+  - 예: `README.md`, `docs/ROOM_FLOW.md`, `npm run test`
 
 금지:
 - 근거 없는 과장 표현
@@ -125,7 +140,7 @@ PR 작성 시 `.github/PULL_REQUEST_TEMPLATE.md`를 따른다.
 2. 최종: Codex (머지 직전 Final Gate)
 
 ### 4.2 Codex 최종 리뷰 기준
-- `.github/codex-instructions.md` + `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md` 기준으로 판정
+- `.github/codex-instructions.md` 기준으로 판정
 - Verdict는 `PASS | CONDITIONAL | BLOCK` 중 하나로 명시
 - 최종 2차 검토 호출 코멘트는 아래 문구를 그대로 사용:
   - `@codex 최종 2차 검토 요청. 기준: AGENTS.md, STANDARDS.md, .github/codex-instructions.md`

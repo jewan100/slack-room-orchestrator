@@ -37,38 +37,6 @@
 - Slack Bolt + Socket Mode
 - SQLite (`sqlite3` + `sqlite`)
 
-## 빠른 시작
-1. 의존성 설치: `npm install`
-2. 환경변수 준비: `.env.example` 참고하여 `.env` 작성
-3. 개발 실행: `npm run dev`
-
-## 필수 환경변수
-- `SLACK_BOT_TOKEN`
-- `SLACK_APP_TOKEN`
-- `ROOM_START_CHANNEL_ID`
-- `ROOM_LAUNCH_CHANNEL_ID`
-- `SQLITE_PATH`
-- `OPENCLAW_API_BASE_URL` (예: `http://127.0.0.1:18789`)
-- `OPENCLAW_API_KEY`
-- `OPENCLAW_MODEL`
-- `OPENCLAW_EVENTS_FILE_PATH` (기본 `./data/openclaw-room-events.ndjson`)
-- `ROOM_MODE_TTL_MINUTES` (기본 `10`)
-- `ROOM_AUTO_QUESTION_INTERVAL_MINUTES` (기본 `30`)
-- `OPENCLAW_OUTBOX_DISPATCH_INTERVAL_MS` (기본 `5000`)
-
-권장:
-- `OPENCLAW_AGENT_ID` (기본 `main`)
-- `OPENCLAW_REQUEST_TIMEOUT_MS` (기본 `12000`)
-- `OPENCLAW_LIVE_REPLY_MAX_RETRIES` (기본 `2`)
-- `OPENCLAW_LIVE_REPLY_RETRY_DELAY_MS` (기본 `5000`)
-- `LOG_LEVEL` (`debug|info|warn|error`)
-- `PORT` (기본값 `3000`)
-
-## Slack 커맨드 모델
-- 현재: 단일 Slash Command `/room` + 서브커맨드 파싱
-- 확장 방향: `/room` 외 다른 도메인 커맨드를 모듈 단위로 추가
-- 공통 원칙: Slack 진입점은 얇게, 도메인 로직은 `service/repository/adapter` 경계로 분리
-
 ## 수행 주체 모델
 - 명령 요청자: Slack에서 커맨드를 입력하는 사람(기본: 형)
 - 오케스트레이터: 택배(검정 고양이 형님, 커맨드 파싱/상태 전이/실행 조율)
@@ -81,55 +49,12 @@
 - `/room stop`
 - `/room help`
 
-## 데이터 영속화
-- 마이그레이션: `migrations/001_init.sql`
-- OpenClaw 연동 확장: `migrations/002_openclaw_sync.sql`
-- 실시간 불변식 보강: `migrations/003_room_watch_target_active_unique.sql`
-- OFF 사유 확장: `migrations/004_room_watch_target_manual_off_reason.sql`
-- summary trigger 제거: `migrations/005_openclaw_remove_summary_trigger.sql`
-- 현재 저장 대상(`room` 도메인):
-  - 세션: `room_sessions`
-  - 브리핑: `room_briefings`
-  - 워커 라운드: `room_worker_rounds`
-  - OpenClaw 감시 대상: `room_watch_targets`
-  - OpenClaw 스레드 메시지 메타데이터: `room_thread_messages`
-  - OpenClaw 이벤트 outbox: `openclaw_event_outbox`
-- 재시작 후 상태 유지
+## 필독 문서
+기본은 `AGENTS.md`의 Core allowlist만 읽고 시작합니다. (충돌 해결 우선순위도 `AGENTS.md` 참고)
 
-## OpenClaw 연동 규칙 (v1)
-### 실시간 경로 (1순위)
-- Slack 메시지 입력은 `slack-room-orchestrator`가 소유한다.
-- 감시 대상은 SQLite(`room_watch_targets`)로 판별하고, 아래 조건일 때만 회의 모드로 반응한다.
-  - `status='ON'`
-  - `channel_id` 일치
-  - `thread_ts` 일치
-- 회의 모드 메시지는 OpenClaw OpenAI 호환 HTTP API(`POST /v1/chat/completions`)로 답변을 생성하고, 동일 thread에 답장을 게시한다.
-- 시작 채널 기준 활성 planning room은 1개만 허용한다.
-
-### 백그라운드 경로 (2순위 보조)
-- `/room start` 성공 시 planning thread를 watch target으로 ON 등록하고 `ROOM_MODE_ON` 이벤트를 적재한다.
-- `/room launch` 성공 시 planning watch target을 OFF 전환하고 `ROOM_MODE_OFF(offReason=LAUNCH)`를 적재한다.
-- planning thread에 `ROOM_MODE_TTL_MINUTES` 동안 메시지가 없으면 `ROOM_MODE_OFF(offReason=TTL)`를 자동 발행한다.
-- `ROOM_AUTO_QUESTION_INTERVAL_MINUTES` 경과 시 `ROOM_QUESTION_TRIGGER`를 자동 적재한다.
-- 이벤트 전달은 at-least-once다. 소비 측(OpenClaw)은 `eventId` 기준으로 중복 제거한다.
-- NDJSON에는 메시지 본문 전문을 저장하지 않고 메타데이터만 다룬다.
-
-## 개발/검증 명령
-- `npm run lint`
-- `npm run typecheck`
-- `npm test`
-
-## 필독 문서 우선순위
-`AGENTS.md`의 문서 우선순위와 동일하게 유지한다.
-
-1. `AGENTS.md` (AI 워커 작업 계약, 최상위 작업 지침)
-2. `JEWAN_DEV_CONSTITUTION.md` (전역 개발 헌법, 최상위 원칙)
-3. `STANDARDS.md` (레포 공통 구현/프로세스 표준)
-4. `SLACK_COMMAND_ENGINEERING_STANDARDS.md` (도메인 특화 규칙)
-5. `README.md` (현재 레포 운영 맥락/확장 방향)
-6. `docs/decision/DECISION_LOG.md` (현재 유효 기준선)
-7. `docs/reviewer/PR_REVIEW_POLICY.md` (리뷰 절차)
-8. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md` (최종 점검 항목)
-9. `.github/copilot-instructions.md` (Copilot 작업 가이드)
-10. `.github/codex-instructions.md` (Codex 최종 게이트 기준)
-11. `.github/PULL_REQUEST_TEMPLATE.md` (PR 작성 형식)
+Docs(Core 5):
+- `docs/README.md`
+- `docs/ROOM_FLOW.md`
+- `docs/decision/DECISION_LOG.md`
+- `docs/owner/PROJECT_TODO.md`
+- `docs/developer/COMMAND_SPEC.md`
