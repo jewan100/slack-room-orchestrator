@@ -43,12 +43,6 @@
 - 워커 실행자: 소포들(하얀 고양이 팀, 분석/후보안/검증 작업 담당)
 - 최종 결정자: 형(최종 선택/확정 권한)
 
-예시:
-- `/room start`
-- `/room launch`
-- `/room stop`
-- `/room help`
-
 ## 필독 문서
 기본은 `AGENTS.md`의 Core allowlist만 읽고 시작합니다. (충돌 해결 우선순위도 `AGENTS.md` 참고)
 
