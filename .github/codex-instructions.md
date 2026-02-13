@@ -11,8 +11,8 @@ Copilot 1차 리뷰가 코드 품질 중심이라면, Codex는 **전체 정합�
 1. `JEWAN_DEV_CONSTITUTION.md`
 2. `STANDARDS.md`
 3. `SLACK_COMMAND_ENGINEERING_STANDARDS.md` (도메인 변경 시)
-4. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md`
-5. `AGENTS.md`
+4. `AGENTS.md`
+5. `docs/decision/DECISION_LOG.md`
 6. `.github/PULL_REQUEST_TEMPLATE.md`
 
 ## 리뷰 근거 범위

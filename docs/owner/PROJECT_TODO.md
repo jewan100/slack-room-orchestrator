@@ -13,12 +13,12 @@
 ## 백로그 항목
 | ID | 우선순위 | 작업 | 주체 | 상태 | 연결 문서 |
 | --- | --- | --- | --- | --- | --- |
-| BG-001 | P0 | 트렌드 보고서 자동 발송 파이프라인 안정화 | 택배, 소포 | DOING | `docs/operations/REMINDER_POLICY.md` |
-| BG-002 | P0 | 아이디어 허들 -> IDEA_BANK 수집 플로우 자동화 | 택배, 소포 | DOING | `docs/owner/PROJECT_CHARTER.md` |
+| BG-001 | P0 | 트렌드 보고서 자동 발송 파이프라인 안정화 | 택배, 소포 | DOING | - |
+| BG-002 | P0 | 아이디어 허들 -> IDEA_BANK 수집 플로우 자동화 | 택배, 소포 | DOING | `README.md` |
 | BG-003 | P1 | `/room help` 커맨드 도입 여부 확정 및 반영 | 형(결정), 택배(조율) | DONE | `docs/developer/COMMAND_SPEC.md` |
-| BG-004 | P1 | 로컬 -> N100 이전 설계 검증 및 런북 보강 | 택배 | TODO | `docs/operations/MIGRATION_PLAN_LOCAL_TO_N100.md` |
+| BG-004 | P1 | 로컬 -> N100 이전 설계 검증 및 런북 보강 | 택배 | TODO | - |
 | BG-005 | P2 | `/room status`, `/room decide` 2차 구현 | 택배, 소포 | TODO | `docs/developer/COMMAND_SPEC.md` |
-| BG-006 | P0 | `/room launch` 실 LLM adapter 연동(인터페이스 기반, Prompt 모드로 MVP) | 택배, 소포 | DOING | `docs/decision/DECISION_LOG.md` |
+| BG-006 | P0 | `/room launch` 실 LLM adapter 연동(인터페이스 기반) | 택배, 소포 | DOING | `docs/decision/DECISION_LOG.md` |
 | BG-006A | P0 | Slack 응답 코드/사용자 출력 문구 정리(장황함 제거) + 로그 이벤트 정합화 | 택배 | DONE | `src/shared/roomSlackUserMessages.ts`, `src/shared/errorCodes.ts`, `src/shared/roomLogEventNames.ts` |
 | BG-007 | P2 | Slash Command 자동 로그(아이디어) | 택배 | TODO | `docs/decision/DECISION_LOG.md` |
 | BG-008 | P2 | 소포 합류 시점에 persona 톤 분리(택배/소포 메시지 카탈로그 분리 + 런타임 스위치) | 택배, 소포 | TODO | `src/shared/messages.ts` |
