@@ -13,6 +13,8 @@
 - adapters/outbound
 
 ## 워크플로우
-1. `/room start <topic>`
+1. `/room start`
 2. `/room launch`
-3. `/room decide`
+3. `/room stop`
+4. `/room help`
+5. `/room decide` (2차)

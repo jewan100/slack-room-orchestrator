@@ -206,6 +206,36 @@ export class SqliteRoomSessionRepository implements RoomSessionRepository {
     return updated;
   }
 
+  // 활성 세션을 강제 종료하며 DECIDED 상태로 전이한다.
+  public async updateSessionToDecided(input: { sessionId: string; decidedOption: CandidateOption | null }): Promise<RoomSession> {
+    const now = new Date().toISOString();
+
+    const result = await this.db.run(
+      `
+      UPDATE room_sessions
+      SET state = 'DECIDED',
+          decided_option = ?,
+          updated_at = ?
+      WHERE id = ?
+        AND state IN ('PREPARED', 'RUNNING')
+    `,
+      input.decidedOption,
+      now,
+      input.sessionId
+    );
+
+    if (result.changes !== 1) {
+      throw new Error(ROOM_SQLITE_MESSAGES.updateSessionToDecidedFailed);
+    }
+
+    const updated = await this.findById(input.sessionId);
+    if (!updated) {
+      throw new Error(ROOM_SQLITE_MESSAGES.updateSessionToDecidedFailed);
+    }
+
+    return updated;
+  }
+
   // start 예약 단계에서 만든 PREPARED 세션만 조건부로 삭제한다.
   // 상태가 이미 바뀐 세션(RUNNING 등)은 삭제하지 않고 false를 반환한다.
   public async deleteReservedPreparedSession(input: DeleteReservedPreparedSessionInput): Promise<boolean> {

@@ -1,17 +1,11 @@
 import { App, LogLevel as BoltLogLevel } from "@slack/bolt";
 import { ROOM_LOG_EVENT_NAMES, ROOM_SLASH_COMMAND } from "../../../shared/messages";
-import type { Logger, LogLevel } from "../../../shared/logger";
-import type { RoomCommandRequest, SlackChatClient } from "../../../shared/types";
+import type { LogLevel } from "../../../shared/logger";
+import type { BoltAppFactoryOptions } from "./boltAppTypes";
+import { bindRoomCommand, bindRoomHelpAction } from "./roomSlashCommandBinding";
+import { bindRoomThreadMessageEvent } from "./roomThreadMessageEventBinding";
 
-// Bolt 앱 생성에 필요한 의존성을 묶은 옵션
-// 핸들러를 외부 주입받아 어댑터가 유스케이스 구현을 직접 알지 않도록 한다.
-export interface BoltAppFactoryOptions {
-  botToken: string;
-  appToken: string;
-  logLevel: LogLevel;
-  logger: Logger;
-  roomCommandHandler: (request: RoomCommandRequest) => Promise<void>;
-}
+export type { SlackMessageEventPayload, RoomThreadMessageHandlerInput, BoltAppFactoryOptions } from "./boltAppTypes";
 
 // 프로젝트 로그 레벨을 Bolt 내부 레벨 enum으로 매핑한다.
 function mapLogLevel(logLevel: LogLevel): BoltLogLevel {
@@ -37,25 +31,12 @@ export function createBoltApp(options: BoltAppFactoryOptions): App {
     logLevel: mapLogLevel(options.logLevel)
   });
 
-  app.command(ROOM_SLASH_COMMAND, async ({ ack, command, respond, client }) => {
-    await options.roomCommandHandler({
-      ack: async () => {
-        await ack();
-      },
-      respond: async (payload) => {
-        await respond(payload);
-      },
-      command: {
-        text: command.text,
-        userId: command.user_id,
-        teamId: command.team_id,
-        channelId: command.channel_id
-      },
-      client: client as unknown as SlackChatClient
-    });
-  });
+  bindRoomCommand(app, options);
+  bindRoomHelpAction(app);
+  bindRoomThreadMessageEvent(app, options);
 
   options.logger.info(ROOM_LOG_EVENT_NAMES.slackCommandBound, { command: ROOM_SLASH_COMMAND });
 
   return app;
 }
+

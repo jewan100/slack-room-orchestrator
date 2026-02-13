@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ROOM_ERROR_CODES } from "../src/shared/errorCodes";
-import { ROOM_START_SERVICE_MESSAGES } from "../src/shared/messages";
+import { OPENCLAW_EVENT_PROTOCOL_VERSION } from "../src/shared/openclawSyncTypes";
+import { ROOM_START_SERVICE_CONSTANTS } from "../src/shared/messages";
 import { createLogger } from "../src/shared/logger";
-import type { SlackThreadPort } from "../src/shared/types";
+import type { OpenClawChatClient, RoomModeLifecycleService, SlackThreadPort } from "../src/shared/types";
+import { ManageRoomModeService } from "../src/services/openclaw/manageRoomModeService";
 import { StartRoomSessionService } from "../src/services/startRoomSessionService";
 import { createTestDatabase, type TestDatabaseContext } from "./helpers/createTestDatabase";
 
@@ -40,6 +42,28 @@ class FailingThreadCreationSlackThreadPort extends FakeSlackThreadPort {
   }
 }
 
+// 주제 미입력 start에서 kickoff 메시지 생성을 검증하기 위한 OpenClaw 대역 구현체
+class FakeOpenClawChatClient implements OpenClawChatClient {
+  public readonly calls: Array<{
+    sessionKey: string;
+    systemMessage: string;
+    userMessage: string;
+    userId: string | null;
+  }> = [];
+
+  public constructor(private readonly responseText: string) {}
+
+  public async complete(input: {
+    sessionKey: string;
+    systemMessage: string;
+    userMessage: string;
+    userId: string | null;
+  }): Promise<string> {
+    this.calls.push(input);
+    return this.responseText;
+  }
+}
+
 // `StartRoomSessionService` 핵심 시나리오를 검증한다.
 describe("StartRoomSessionService", () => {
   let context: TestDatabaseContext | null = null;
@@ -66,7 +90,6 @@ describe("StartRoomSessionService", () => {
     // 실행: start 명령 유스케이스를 수행한다.
     const result = await service.execute(
       {
-        topic: "Implement start command",
         requestedByUserId: "U01",
         workspaceId: "T01",
         startChannelId: "C_START"
@@ -96,7 +119,6 @@ describe("StartRoomSessionService", () => {
 
     await service.execute(
       {
-        topic: "First session",
         requestedByUserId: "U01",
         workspaceId: "T01",
         startChannelId: "C_START"
@@ -107,7 +129,6 @@ describe("StartRoomSessionService", () => {
     await expect(
       service.execute(
         {
-          topic: "Second session",
           requestedByUserId: "U02",
           workspaceId: "T01",
           startChannelId: "C_START"
@@ -129,12 +150,12 @@ describe("StartRoomSessionService", () => {
 
     // createPreparedSession 단계에서 sqlite unique 충돌을 강제로 발생시킨다.
     repository.createPreparedSession = async () => {
-      const constraintError = new Error(ROOM_START_SERVICE_MESSAGES.activeSessionConstraintIndexName) as Error & {
+      const constraintError = new Error(ROOM_START_SERVICE_CONSTANTS.activeSessionConstraintIndexName) as Error & {
         code: string;
         errno: number;
       };
-      constraintError.code = ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrorCode;
-      constraintError.errno = ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrno;
+      constraintError.code = ROOM_START_SERVICE_CONSTANTS.sqliteConstraintErrorCode;
+      constraintError.errno = ROOM_START_SERVICE_CONSTANTS.sqliteConstraintErrno;
       throw constraintError;
     };
 
@@ -147,7 +168,6 @@ describe("StartRoomSessionService", () => {
     await expect(
       service.execute(
         {
-          topic: "Race condition",
           requestedByUserId: "U01",
           workspaceId: "T01",
           startChannelId: "C_START"
@@ -173,7 +193,6 @@ describe("StartRoomSessionService", () => {
     // 실행: 후속 안내 실패가 발생하는 start를 수행한다.
     const result = await service.execute(
       {
-        topic: "Start succeeds despite followup failure",
         requestedByUserId: "U01",
         workspaceId: "T01",
         startChannelId: "C_START"
@@ -205,7 +224,6 @@ describe("StartRoomSessionService", () => {
     await expect(
       service.execute(
         {
-          topic: "Start with thread failure",
           requestedByUserId: "U01",
           workspaceId: "T01",
           startChannelId: "C_START"
@@ -238,7 +256,6 @@ describe("StartRoomSessionService", () => {
     await expect(
       service.execute(
         {
-          topic: "Start with briefing failure",
           requestedByUserId: "U01",
           workspaceId: "T01",
           startChannelId: "C_START"
@@ -249,5 +266,125 @@ describe("StartRoomSessionService", () => {
 
     const activeSession = await context.roomSessionRepository.findActiveSessionByStartChannel("C_START");
     expect(activeSession).toBeNull();
+  });
+
+  // start 성공 시 OpenClaw planning mode ON 대상/이벤트가 함께 생성되는지 검증한다.
+  it("creates watch target and ROOM_MODE_ON outbox event on start success", async () => {
+    context = await createTestDatabase();
+    const roomModeLifecycleService = new ManageRoomModeService(
+      context.roomWatchTargetRepository,
+      context.openClawEventOutboxRepository,
+      createLogger("error")
+    );
+
+    const service = new StartRoomSessionService(
+      context.roomSessionRepository,
+      context.briefingRepository,
+      createLogger("error"),
+      {
+        roomModeLifecycleService,
+        roomModeTtlMinutes: 60
+      }
+    );
+    const result = await service.execute(
+      {
+        requestedByUserId: "U01",
+        workspaceId: "T01",
+        startChannelId: "C_START"
+      },
+      new FakeSlackThreadPort()
+    );
+
+    const watchTarget = await context.roomWatchTargetRepository.findOnWatchTargetBySessionId(result.session.id);
+    expect(watchTarget).not.toBeNull();
+    expect(watchTarget?.status).toBe("ON");
+    expect(watchTarget?.mode).toBe("PLANNING");
+
+    const pendingEvents = await context.openClawEventOutboxRepository.claimPendingEvents(new Date().toISOString(), 10);
+    expect(pendingEvents.length).toBe(1);
+    expect(pendingEvents[0]?.eventType).toBe("ROOM_MODE_ON");
+    expect(pendingEvents[0]?.payload.version).toBe(OPENCLAW_EVENT_PROTOCOL_VERSION);
+  });
+
+  // watch target 유니크 충돌을 ROOM_ALREADY_RUNNING으로 매핑하고 예약 세션을 롤백하는지 검증한다.
+  it("maps watch target unique conflict to ROOM_ALREADY_RUNNING and rolls back reserved session", async () => {
+    context = await createTestDatabase();
+    const failingLifecycleService: RoomModeLifecycleService = {
+      async turnOnPlanningRoomMode(): Promise<void> {
+        const constraintError = new Error(ROOM_START_SERVICE_CONSTANTS.activeWatchTargetConstraintIndexName) as Error & {
+          code: string;
+          errno: number;
+        };
+        constraintError.code = ROOM_START_SERVICE_CONSTANTS.sqliteConstraintErrorCode;
+        constraintError.errno = ROOM_START_SERVICE_CONSTANTS.sqliteConstraintErrno;
+        throw constraintError;
+      },
+      async turnOffPlanningRoomMode(): Promise<void> {
+        return;
+      }
+    };
+
+    const service = new StartRoomSessionService(
+      context.roomSessionRepository,
+      context.briefingRepository,
+      createLogger("error"),
+      {
+        roomModeLifecycleService: failingLifecycleService,
+        roomModeTtlMinutes: 60
+      }
+    );
+
+    await expect(
+      service.execute(
+        {
+          requestedByUserId: "U01",
+          workspaceId: "T01",
+          startChannelId: "C_START"
+        },
+        new FakeSlackThreadPort()
+      )
+    ).rejects.toMatchObject({
+      code: ROOM_ERROR_CODES.ROOM_ALREADY_RUNNING
+    });
+
+    const activeSession = await context.roomSessionRepository.findActiveSessionByStartChannel("C_START");
+    expect(activeSession).toBeNull();
+  });
+
+  // start 실행 시 자동 토픽으로 세션을 만들고 kickoff 질문을 스레드에 게시하는지 검증한다.
+  it("creates session with auto topic and posts OpenClaw kickoff notice", async () => {
+    context = await createTestDatabase();
+    const openClawChatClient = new FakeOpenClawChatClient("냐옹, 어떤 회의를 준비할까요?");
+    const roomModeLifecycleService = new ManageRoomModeService(
+      context.roomWatchTargetRepository,
+      context.openClawEventOutboxRepository,
+      createLogger("error")
+    );
+    const slackThreadPort = new FakeSlackThreadPort();
+
+    const service = new StartRoomSessionService(
+      context.roomSessionRepository,
+      context.briefingRepository,
+      createLogger("error"),
+      {
+        roomModeLifecycleService,
+        roomModeTtlMinutes: 60,
+        openClawChatClient
+      }
+    );
+
+    const result = await service.execute(
+      {
+        requestedByUserId: "U01",
+        workspaceId: "T01",
+        startChannelId: "C_START"
+      },
+      slackThreadPort
+    );
+
+    expect(result.session.topic).toBe(ROOM_START_SERVICE_CONSTANTS.autoGeneratedTopic);
+    expect(openClawChatClient.calls.length).toBe(1);
+    expect(openClawChatClient.calls[0]?.sessionKey).toBe(`room:${result.session.id}`);
+    expect(slackThreadPort.postedMessages.some((message) => message.text.includes("어떤 회의를 준비할까요"))).toBe(true);
   });
 });

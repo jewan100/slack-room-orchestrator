@@ -19,7 +19,7 @@
 
 ### 1.1 책임 분리 (도메인)
 - `commands/`: Slack 명령 파싱 및 진입점
-- `services/`: 유스케이스 오케스트레이션 (`start`, `summary`, `launch`, `status`, `decide`)
+- `services/`: 유스케이스 오케스트레이션 (`start`, `launch`, `stop`, `help`, `status`, `decide`)
 - `repositories/`: DB CRUD
 - `adapters/`: Slack/LLM/외부 API 연동
 
@@ -33,9 +33,10 @@
 - 환경별 채널 ID/이름은 환경변수로 주입하고 코드/문서에 하드코딩하지 않는다.
 
 ### 2.2 명령 세트 (MVP)
-- `/room start <topic>`
-- `/room summary`
+- `/room start`
 - `/room launch`
+- `/room stop`
+- `/room help`
 - `/room status`
 - `/room decide <A|B|C>`
 
@@ -58,6 +59,19 @@
 - 선점 이후 핵심 단계 실패 시 롤백/보상 처리를 구현한다.
 - 동시성 충돌(unique constraint, 선점 실패)은 도메인 에러코드로 반환한다.
 
+### 2.6 Slash ACK/Follow-up UX 표준 (ephemeral 1개 고정)
+- Slash command는 **3초 내 ack**가 없으면 Slack이 자동으로 실패 처리할 수 있다.
+- `/room`은 어떤 입력이든 **ack을 최우선**으로 처리한다.
+- Slash 1회 호출당 ephemeral 응답은 **1개만** 남긴다(중복 금지).
+- ack payload는 **text 포함 필수**다(빈 ack 금지).
+- `invalid/help`: **ack 1회로 최종 안내**를 반환하고 종료한다(서비스 호출 금지).
+- `start/launch/stop`: **ack 1회로 "처리 중"**을 띄우고, 실제 처리는 post-ack에서 실행한다.
+- 성공 시: `delete_original`을 best-effort로 시도해 "처리 중"을 지운다(실패해도 추가 보정 메시지 금지).
+- 실패 시: `replace_original`로 "처리 중"을 에러로 교체한다(교체 1회 정책).
+- 에러 교체 책임은 inbound adapter 1곳으로 고정한다. 서비스/핸들러는 throw만 하고 `respond()`를 직접 호출하지 않는다.
+- help 버튼 액션의 `respond()`는 "액션이 발생한 메시지(=버튼이 달린 메시지)"를 교체한다(슬래시 처리중 메시지와 별개).
+- 구현 참고: `src/adapters/inbound/slack/roomSlashResponseController.ts`, `src/adapters/inbound/slack/roomSlashCommandBinding.ts`
+
 ---
 
 ## 3) 에러/응답 규격 (도메인)
@@ -67,7 +81,7 @@
 {
   "error": {
     "code": "ROOM_LAUNCH_FAILED",
-    "message": "launch failed"
+    "message": "launch에 실패했습니다."
   }
 }
 ```

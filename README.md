@@ -17,9 +17,14 @@
 - 결정 변경은 `docs/decision/DECISION_LOG.md`에 기록한다.
 
 ## 현재 구현 범위 (MVP 1차: room 도메인)
-- `/room start <topic>`
-- `/room summary [--brief|--full]`
+- `/room start`
 - `/room launch`
+- `/room stop`
+- `/room help`
+- OpenClaw 연동 v1
+  - 실시간 답변: Slack thread 메시지 -> OpenClaw HTTP -> Slack thread 답장
+  - 수명 관리: `ROOM_MODE_ON`/`ROOM_MODE_OFF` + TTL 자동 종료
+  - 백그라운드 보조: outbox -> NDJSON 디스패치(복구/자동화)
 
 미구현(2차):
 - `/room status`
@@ -43,8 +48,19 @@
 - `ROOM_START_CHANNEL_ID`
 - `ROOM_LAUNCH_CHANNEL_ID`
 - `SQLITE_PATH`
+- `OPENCLAW_API_BASE_URL` (예: `http://127.0.0.1:18789`)
+- `OPENCLAW_API_KEY`
+- `OPENCLAW_MODEL`
+- `OPENCLAW_EVENTS_FILE_PATH` (기본 `./data/openclaw-room-events.ndjson`)
+- `ROOM_MODE_TTL_MINUTES` (기본 `10`)
+- `ROOM_AUTO_QUESTION_INTERVAL_MINUTES` (기본 `30`)
+- `OPENCLAW_OUTBOX_DISPATCH_INTERVAL_MS` (기본 `5000`)
 
 권장:
+- `OPENCLAW_AGENT_ID` (기본 `main`)
+- `OPENCLAW_REQUEST_TIMEOUT_MS` (기본 `12000`)
+- `OPENCLAW_LIVE_REPLY_MAX_RETRIES` (기본 `2`)
+- `OPENCLAW_LIVE_REPLY_RETRY_DELAY_MS` (기본 `5000`)
 - `LOG_LEVEL` (`debug|info|warn|error`)
 - `PORT` (기본값 `3000`)
 
@@ -60,17 +76,43 @@
 - 최종 결정자: 형(최종 선택/확정 권한)
 
 예시:
-- `/room start improve onboarding flow`
-- `/room summary --brief`
+- `/room start`
 - `/room launch`
+- `/room stop`
+- `/room help`
 
 ## 데이터 영속화
 - 마이그레이션: `migrations/001_init.sql`
+- OpenClaw 연동 확장: `migrations/002_openclaw_sync.sql`
+- 실시간 불변식 보강: `migrations/003_room_watch_target_active_unique.sql`
+- OFF 사유 확장: `migrations/004_room_watch_target_manual_off_reason.sql`
+- summary trigger 제거: `migrations/005_openclaw_remove_summary_trigger.sql`
 - 현재 저장 대상(`room` 도메인):
   - 세션: `room_sessions`
   - 브리핑: `room_briefings`
   - 워커 라운드: `room_worker_rounds`
+  - OpenClaw 감시 대상: `room_watch_targets`
+  - OpenClaw 스레드 메시지 메타데이터: `room_thread_messages`
+  - OpenClaw 이벤트 outbox: `openclaw_event_outbox`
 - 재시작 후 상태 유지
+
+## OpenClaw 연동 규칙 (v1)
+### 실시간 경로 (1순위)
+- Slack 메시지 입력은 `slack-room-orchestrator`가 소유한다.
+- 감시 대상은 SQLite(`room_watch_targets`)로 판별하고, 아래 조건일 때만 회의 모드로 반응한다.
+  - `status='ON'`
+  - `channel_id` 일치
+  - `thread_ts` 일치
+- 회의 모드 메시지는 OpenClaw OpenAI 호환 HTTP API(`POST /v1/chat/completions`)로 답변을 생성하고, 동일 thread에 답장을 게시한다.
+- 시작 채널 기준 활성 planning room은 1개만 허용한다.
+
+### 백그라운드 경로 (2순위 보조)
+- `/room start` 성공 시 planning thread를 watch target으로 ON 등록하고 `ROOM_MODE_ON` 이벤트를 적재한다.
+- `/room launch` 성공 시 planning watch target을 OFF 전환하고 `ROOM_MODE_OFF(offReason=LAUNCH)`를 적재한다.
+- planning thread에 `ROOM_MODE_TTL_MINUTES` 동안 메시지가 없으면 `ROOM_MODE_OFF(offReason=TTL)`를 자동 발행한다.
+- `ROOM_AUTO_QUESTION_INTERVAL_MINUTES` 경과 시 `ROOM_QUESTION_TRIGGER`를 자동 적재한다.
+- 이벤트 전달은 at-least-once다. 소비 측(OpenClaw)은 `eventId` 기준으로 중복 제거한다.
+- NDJSON에는 메시지 본문 전문을 저장하지 않고 메타데이터만 다룬다.
 
 ## 개발/검증 명령
 - `npm run lint`

@@ -10,9 +10,9 @@
 - `/room launch` 구현 (실행 스레드/AI 라운드)
 
 ## Phase 4
-- `/room status`, `/room summary`, `/room decide`
+- `/room status`, `/room decide`
 
 ## Done 조건
-- 명령 5개 동작 (`start`, `launch`, `status`, `summary`, `decide`)
+- 명령 6개 동작 (`start`, `launch`, `stop`, `help`, `status`, `decide`)
 - CI 통과
 - 리뷰(Copilot + Codex) 완료

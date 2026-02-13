@@ -23,6 +23,7 @@ coverage/
 *.db
 *.sqlite
 *.sqlite3
+data/
 data/*.db
 
 # Logs
