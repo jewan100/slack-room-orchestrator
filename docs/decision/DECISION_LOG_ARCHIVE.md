@@ -28,3 +28,21 @@
   - 새 작업은 `BACKLOG`에 먼저 등록하고, 착수 시 해당 스프린트 문서로 이동
   - 다음 스프린트 문서는 동일한 네이밍 규칙(`SPRINT_XXX_PLAN.md`)으로 생성
 - 상태: 대체됨
+
+## 2026-02-13
+- 주제: LLM 연동은 인터페이스(어댑터) 기반으로 설계하고 구현체는 교체 가능하게 유지
+- 영향 범위: `/room launch` 유스케이스, LLM 어댑터, 환경변수/운영
+- 결정:
+  - launch 단계에서 `Builder`/`Critic` 호출은 `LLMClient`(가칭) 인터페이스로 추상화한다.
+  - 실제 호출 방식은 구현체로 분리한다.
+    - (초기) `PromptBased*Client`: 모델명 + 프롬프트(서버 보관) + Launch Brief를 보내는 방식
+    - (추후) `AgentBased*Client`: 벤더 콘솔/대시보드에서 준비한 agent 설정을 ID로 호출하는 방식(가능해지면 교체)
+  - `slack-room-orchestrator`는 우선 OpenAI/Anthropic 벤더 API에 직접 통신해도 된다(별도 서버 필수 아님).
+  - 어떤 방식이든 launch 입력은 `Launch Brief`를 단일 소스로 유지한다.
+- 근거:
+  - 벤더별/버전별 API 차이를 흡수하면서도 `/room launch` 유스케이스 코어를 안정적으로 유지하기 위함
+  - 형(사용자)이 콘솔에서 agent 세팅을 선호할 때, 코드 변경 범위를 어댑터 교체로 제한하기 위함
+- 후속 액션:
+  - `LaunchRoomSessionService`는 인터페이스만 의존하도록 변경
+  - 환경변수로 prompt/agent 모드를 스위치할 수 있게 구성
+- 상태: 병합됨 (D-006으로 병합, 2026-02-13)

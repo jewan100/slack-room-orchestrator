@@ -144,12 +144,23 @@
     - Claude: Critic/Editor (리스크/가정/약관/명료화)
   - 프롬프트는 `room launch` 전용으로 `docs/prompts/*`에 보관한다.
   - launch 결과는 모델 원문 2개 덤프가 아니라 Moderator가 합친 `Final Memo`(긴 문서) 1개로 Slack 스레드에 남긴다.
+- LLM 연동은 인터페이스(어댑터) 기반으로 설계하고 구현체는 교체 가능하게 유지한다.
+  - launch 단계에서 `Builder`/`Critic` 호출은 `LLMClient`(가칭) 인터페이스로 추상화한다.
+  - 실제 호출 방식은 구현체로 분리한다.
+    - (초기) `PromptBased*Client`: 모델명 + 프롬프트(서버 보관) + Launch Brief를 보내는 방식
+    - (추후) `AgentBased*Client`: 벤더 콘솔/대시보드에서 준비한 agent 설정을 ID로 호출하는 방식(가능해지면 교체)
+  - `slack-room-orchestrator`는 우선 OpenAI/Anthropic 벤더 API에 직접 통신해도 된다(별도 서버 필수 아님).
+  - 어떤 방식이든 launch 입력은 `Launch Brief`를 단일 소스로 유지한다.
 - 근거:
   - start 단계에서 컨텍스트를 압축해 launch 입력을 안정화(품질/비용/일관성)하기 위함
   - Builder/Critic 역할을 분리해야 결과물 중복을 줄이고 최종 문서 편집이 쉬움
+  - 벤더별/버전별 API 차이를 흡수하면서도 `/room launch` 유스케이스 코어를 안정적으로 유지하기 위함
+  - 형(사용자)이 콘솔에서 agent 세팅을 선호할 때, 코드 변경 범위를 어댑터 교체로 제한하기 위함
 - 후속 액션:
   - 스텁 워커(`RunWorkerRoundStubService`)를 교체 가능한 LLM runner/adapter로 분리
   - `Final Memo` 템플릿을 코드 경로에 반영(섹션 헤더 고정)
+  - `LaunchRoomSessionService`는 인터페이스만 의존하도록 변경
+  - 환경변수로 prompt/agent 모드를 스위치할 수 있게 구성
 - 상태: 유효
 
 ### D-006A
@@ -167,21 +178,17 @@
   - 2차에서 "정리/리포트" 커맨드 도입 여부를 별도 결정으로 검토
 - 상태: 유효
 
-### D-007
+### D-008
 - 날짜: 2026-02-13
-- 주제: LLM 연동은 인터페이스(어댑터) 기반으로 설계하고 구현체는 교체 가능하게 유지
-- 영향 범위: `/room launch` 유스케이스, LLM 어댑터, 환경변수/운영
+- 주제: AI 코딩 에이전트 작업 원칙(Karpathy 4원칙) 채택
+- 영향 범위: `AGENTS.md`, `README.md`, `docs/developer/STANDARDS.md` (및 향후 PR 운영 전반)
 - 결정:
-  - launch 단계에서 `Builder`/`Critic` 호출은 `LLMClient`(가칭) 인터페이스로 추상화한다.
-  - 실제 호출 방식은 구현체로 분리한다.
-    - (초기) `PromptBased*Client`: 모델명 + 프롬프트(서버 보관) + Launch Brief를 보내는 방식
-    - (추후) `AgentBased*Client`: 벤더 콘솔/대시보드에서 준비한 agent 설정을 ID로 호출하는 방식(가능해지면 교체)
-  - `slack-room-orchestrator`는 우선 OpenAI/Anthropic 벤더 API에 직접 통신해도 된다(별도 서버 필수 아님).
-  - 어떤 방식이든 launch 입력은 `Launch Brief`를 단일 소스로 유지한다.
+  - 모든 AI 워커는 Karpathy 4원칙(Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution)을 기본 행동 원칙으로 따른다.
+  - 상세 코드 스타일 규칙은 `JEWAN_DEV_CONSTITUTION.md`를 단일 원본으로 유지한다.
 - 근거:
-  - 벤더별/버전별 API 차이를 흡수하면서도 `/room launch` 유스케이스 코어를 안정적으로 유지하기 위함
-  - 형(사용자)이 콘솔에서 agent 세팅을 선호할 때, 코드 변경 범위를 어댑터 교체로 제한하기 위함
+  - 과잉 변경/추정/과복잡으로 인한 품질 하락을 예방하고, 리뷰/추적 비용을 줄이기 위함
+  - 문서로 합의된 “작업 방식”을 고정해 워커 간 일관성을 확보하기 위함
 - 후속 액션:
-  - `LaunchRoomSessionService`는 인터페이스만 의존하도록 변경
-  - 환경변수로 prompt/agent 모드를 스위치할 수 있게 구성
+  - 이번 PR에서 `AGENTS.md`에 4원칙을 명문화하고, `README.md`/`docs/developer/STANDARDS.md`에 참조를 연결한다.
+  - 리뷰 체크리스트 반영은 별도 PR에서 검토한다.
 - 상태: 유효

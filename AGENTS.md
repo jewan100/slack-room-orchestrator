@@ -19,18 +19,21 @@
 
 워커는 작업 시작 전 아래 순서대로 문서를 읽고 판단한다.
 
-1. `JEWAN_DEV_CONSTITUTION.md` (전역 개발 헌법, 최상위 원칙)
-2. `STANDARDS.md` (레포 공통 구현/프로세스 표준)
-3. `SLACK_COMMAND_ENGINEERING_STANDARDS.md` (도메인 특화 규칙)
-4. `README.md` (현재 레포 운영 맥락/확장 방향)
-5. `docs/reviewer/PR_REVIEW_POLICY.md` (리뷰 절차)
-6. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md` (최종 점검 항목)
-7. `.github/copilot-instructions.md` (Copilot 작업 가이드)
-8. `.github/codex-instructions.md` (Codex 최종 게이트 기준)
-9. `.github/PULL_REQUEST_TEMPLATE.md` (PR 작성 형식)
+1. `AGENTS.md` (AI 워커 작업 계약, 최상위 작업 지침)
+2. `JEWAN_DEV_CONSTITUTION.md` (전역 개발 헌법, 최상위 원칙)
+3. `STANDARDS.md` (레포 공통 구현/프로세스 표준)
+4. `SLACK_COMMAND_ENGINEERING_STANDARDS.md` (도메인 특화 규칙)
+5. `README.md` (현재 레포 운영 맥락/확장 방향)
+6. `docs/decision/DECISION_LOG.md` (현재 유효 기준선)
+7. `docs/reviewer/PR_REVIEW_POLICY.md` (리뷰 절차)
+8. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md` (최종 점검 항목)
+9. `.github/copilot-instructions.md` (Copilot 작업 가이드)
+10. `.github/codex-instructions.md` (Codex 최종 게이트 기준)
+11. `.github/PULL_REQUEST_TEMPLATE.md` (PR 작성 형식)
 
 ### 충돌 처리 규칙
 - 문서 간 충돌 시: `CONSTITUTION > STANDARDS > 도메인 규칙 > 기타 문서`
+- 제품/스펙/범위 결정 충돌은 `docs/decision/DECISION_LOG.md`를 우선한다.
 - 충돌 발견 시 반드시 PR에 “문서 충돌”로 명시하고 정리 커밋 포함
 
 ---
@@ -65,6 +68,32 @@
 ### 2.4 변경 단위
 - 한 PR은 한 목적에 집중한다.
 - 문서/코드/리팩토링이 섞이면 PR 본문에 범위를 분리 기재한다.
+
+### 2.5 코딩 에이전트 4원칙 (Karpathy Guidelines)
+
+아래 4원칙은 모든 AI 워커의 기본 행동 원칙이다.  
+상세 코드 스타일 규칙은 `JEWAN_DEV_CONSTITUTION.md`를 단일 원본으로 따른다.
+
+- **Think Before Coding (코드 작성 전에 생각)**
+  - 목표/성공 기준/비목표를 1문장으로 고정한다.
+  - 영향 범위(파일/기능/운영)를 먼저 식별하고, 불확실하면 질문으로 드러낸다.
+  - 구현 전에 “어떤 변경을 왜 하는지”를 단계형 체크리스트로 정리한다.
+  - 임의 추정 금지, 가정/리스크는 PR 본문에 명시한다.
+
+- **Simplicity First (단순함 우선)**
+  - 기존 레이어/경계(adapter/service/repository/validator)를 유지하는 범위에서 가장 단순한 해법을 우선한다.
+  - 새 추상화/새 패턴/새 의존성 도입은 “필요성 + 대안 + 트레이드오프” 문서화 없이 금지한다. (필요 시 ADR)
+  - “미래 확장 대비”를 이유로 현재 요구사항을 넘는 구현을 하지 않는다.
+
+- **Surgical Changes (외과수술식 변경)**
+  - 한 PR은 한 목적, 목적과 무관한 리팩토링/정리/포맷 변경을 금지한다.
+  - 불가피한 대규모 변경은 근거 문서화 + 범위 분리(PR 또는 커밋) + 영향 범위 명시를 강제한다.
+  - 변경은 최소 diff로 유지하고, 동작/계약 변화는 명시적으로 드러낸다.
+
+- **Goal-Driven Execution (목표 지향 실행)**
+  - “완료 조건(DoD)”을 PR 템플릿의 검증/영향 섹션에 근거로 남긴다.
+  - 필요한 검증(`lint`/`typecheck`/`test` 또는 대체 근거)을 제시하지 못하면 “완료”로 간주하지 않는다.
+  - 문서/결정/후속 TODO까지 연결되어 추적 가능해야 한다.
 
 ---
 
@@ -128,11 +157,13 @@ PR 작성 시 `.github/PULL_REQUEST_TEMPLATE.md`를 따른다.
 - [ ] 문서 우선순위 순서대로 최신 확인
 - [ ] 이번 변경의 목적 1문장 정의
 - [ ] 영향 범위(파일/기능/운영) 사전 식별
+- [ ] 성공 기준/비목표/가정을 먼저 정리했는가(Think Before Coding)
 - [ ] 브랜치명 규칙 준수 확인
 
 ## 7) 워커 제출 체크리스트 (PR 전)
 
 - [ ] 변경 내용이 목적과 일치
+- [ ] 목적과 무관한 변경이 섞이지 않았는가(Surgical Changes)
 - [ ] 파일/경로/명령어 코드 표기 적용
 - [ ] 영향 범위/주의사항 PR에 기재
 - [ ] 규칙 충돌/예외 발생 시 명시
