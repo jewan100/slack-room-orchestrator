@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ROOM_ERROR_CODES } from "../src/shared/errorCodes";
-import { ROOM_LAUNCH_SERVICE_MESSAGES } from "../src/shared/messages";
+import { ROOM_LAUNCH_SERVICE_CONSTANTS } from "../src/shared/messages";
 import { createLogger } from "../src/shared/logger";
 import type { RoomModeLifecycleService, RoomSession, SlackThreadPort } from "../src/shared/types";
 import { LaunchRoomSessionService } from "../src/services/launchRoomSessionService";
@@ -326,7 +326,7 @@ describe("LaunchRoomSessionService", () => {
     const repository = context.roomSessionRepository;
     const originalUpdateSessionToRunning = repository.updateSessionToRunning.bind(repository);
     repository.updateSessionToRunning = async (input) => {
-      if (input.launchThreadTs !== ROOM_LAUNCH_SERVICE_MESSAGES.pendingLaunchThreadTs) {
+      if (input.launchThreadTs !== ROOM_LAUNCH_SERVICE_CONSTANTS.pendingLaunchThreadTs) {
         throw new Error("metadata sync failed");
       }
       return originalUpdateSessionToRunning(input);
@@ -350,7 +350,7 @@ describe("LaunchRoomSessionService", () => {
     );
 
     expect(result.session.state).toBe("RUNNING");
-    expect(result.session.launchThreadTs).toBe(ROOM_LAUNCH_SERVICE_MESSAGES.pendingLaunchThreadTs);
+    expect(result.session.launchThreadTs).toBe(ROOM_LAUNCH_SERVICE_CONSTANTS.pendingLaunchThreadTs);
     expect(result.round.roundNo).toBe(1);
   });
 

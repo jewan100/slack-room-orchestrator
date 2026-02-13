@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { OPENCLAW_EVENT_PROTOCOL_VERSION } from "../src/shared/openclawSyncTypes";
-import { ROOM_SQLITE_MESSAGES, ROOM_START_SERVICE_MESSAGES } from "../src/shared/messages";
+import { ROOM_SQLITE_MESSAGES, ROOM_START_SERVICE_CONSTANTS } from "../src/shared/messages";
 import type { WorkerCandidate } from "../src/shared/types";
 import { createTestDatabase, type TestDatabaseContext } from "./helpers/createTestDatabase";
 
@@ -119,12 +119,12 @@ describe("sqlite repositories", () => {
       requestedByUserId: "U01",
       workspaceId: "T01",
       startChannelId: "C_START",
-      startThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+      startThreadTs: ROOM_START_SERVICE_CONSTANTS.pendingStartThreadTs
     });
 
     const deleted = await context.roomSessionRepository.deleteReservedPreparedSession({
       sessionId: session.id,
-      expectedStartThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+      expectedStartThreadTs: ROOM_START_SERVICE_CONSTANTS.pendingStartThreadTs
     });
 
     const loaded = await context.roomSessionRepository.findById(session.id);
@@ -140,14 +140,14 @@ describe("sqlite repositories", () => {
       requestedByUserId: "U01",
       workspaceId: "T01",
       startChannelId: "C_START",
-      startThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+      startThreadTs: ROOM_START_SERVICE_CONSTANTS.pendingStartThreadTs
     });
 
     await context.roomSessionRepository.claimPreparedSessionForLaunch(session.id);
 
     const deleted = await context.roomSessionRepository.deleteReservedPreparedSession({
       sessionId: session.id,
-      expectedStartThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+      expectedStartThreadTs: ROOM_START_SERVICE_CONSTANTS.pendingStartThreadTs
     });
 
     const loaded = await context.roomSessionRepository.findById(session.id);
@@ -185,6 +185,27 @@ describe("sqlite repositories", () => {
     expect(updated.state).toBe("RUNNING");
     expect(updated.launchChannelId).toBe("C_LAUNCH");
     expect(updated.launchThreadTs).toBe("2000.0001");
+  });
+
+  // 활성 세션(PREPARED/RUNNING)이 DECIDED로 전이되는지 검증한다.
+  it("transitions active session to DECIDED", async () => {
+    context = await createTestDatabase();
+    const session = await context.roomSessionRepository.createPreparedSession({
+      topic: "Decide transition",
+      requestedByUserId: "U01",
+      workspaceId: "T01",
+      startChannelId: "C_START",
+      startThreadTs: "1000.0001"
+    });
+
+    const decided = await context.roomSessionRepository.updateSessionToDecided({
+      sessionId: session.id,
+      decidedOption: null
+    });
+
+    const activeAfterDecide = await context.roomSessionRepository.findActiveSessionByStartChannel("C_START");
+    expect(decided.state).toBe("DECIDED");
+    expect(activeAfterDecide).toBeNull();
   });
 
   // 같은 세션에 동일 round_no를 중복 저장하지 못하는지 검증한다.
@@ -278,12 +299,12 @@ describe("sqlite repositories", () => {
 
     const turnedOff = await context.roomWatchTargetRepository.turnOffWatchTarget({
       watchTargetId: watchTarget.id,
-      offReason: "TTL",
+      offReason: "MANUAL",
       turnedOffAt: new Date().toISOString()
     });
 
     expect(turnedOff?.status).toBe("OFF");
-    expect(turnedOff?.offReason).toBe("TTL");
+    expect(turnedOff?.offReason).toBe("MANUAL");
     const loadedAfterOff = await context.roomWatchTargetRepository.findOnWatchTargetBySessionId(session.id);
     expect(loadedAfterOff).toBeNull();
   });
