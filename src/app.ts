@@ -19,11 +19,11 @@ import {
   ROOM_OPENCLAW_MESSAGES
 } from "./shared/messages";
 import { createLogger, normalizeLogLevel, type LogLevel } from "./shared/logger";
-import type { RoomModeLifecycleService } from "./shared/types";
+import type { OpenClawChatClient, RoomModeLifecycleService, SlackChatClient } from "./shared/types";
 import { LaunchRoomSessionService } from "./services/launchRoomSessionService";
 import { RunWorkerRoundStubService } from "./services/runWorkerRoundStubService";
 import { StartRoomSessionService } from "./services/startRoomSessionService";
-import { SummarizeRoomSessionService } from "./services/summarizeRoomSessionService";
+import { StopRoomSessionService } from "./services/stopRoomSessionService";
 import type { OpenClawIntervalRunner } from "./services/openclaw/openClawIntervalRunner";
 
 // 런타임 필수 환경설정 모델
@@ -33,14 +33,32 @@ interface AppEnvironment {
   roomStartChannelId: string;
   roomLaunchChannelId: string;
   sqlitePath: string;
+  openClawApiBaseUrl: string;
+  openClawApiKey: string;
+  openClawModel: string;
+  openClawAgentId: string;
+  openClawRequestTimeoutMs: number;
+  openClawLiveReplyMaxRetries: number;
+  openClawLiveReplyRetryDelayMs: number;
   openClawEventsFilePath: string;
   roomModeTtlMinutes: number;
-  roomAutoSummaryMessageThreshold: number;
   roomAutoQuestionIntervalMinutes: number;
   openClawOutboxDispatchIntervalMs: number;
   logLevel: LogLevel;
   port: number;
 }
+
+// AppEnvironment 중 OpenClaw 실시간 연동 관련 필드 묶음
+type OpenClawEnvironmentSubset = Pick<
+  AppEnvironment,
+  | "openClawApiBaseUrl"
+  | "openClawApiKey"
+  | "openClawModel"
+  | "openClawAgentId"
+  | "openClawRequestTimeoutMs"
+  | "openClawLiveReplyMaxRetries"
+  | "openClawLiveReplyRetryDelayMs"
+>;
 
 // 앱 내부 조립 단계에서 재사용하는 저장소 묶음
 interface AppRepositories {
@@ -59,6 +77,7 @@ interface AppRuntime {
   logger: ReturnType<typeof createLogger>;
   environment: AppEnvironment;
   openClawSchedulers: OpenClawIntervalRunner[];
+  stopOpenClawRuntimeTasks: () => Promise<void>;
 }
 
 // 필수 환경변수를 읽고 공백/누락을 검사한다.
@@ -89,6 +108,24 @@ function parsePositiveIntegerEnvironmentVariable(
   return parsed;
 }
 
+// 0 이상 정수 환경변수를 파싱한다.
+function parseNonNegativeIntegerEnvironmentVariable(
+  name: string,
+  rawValue: string | undefined,
+  defaultValue: number
+): number {
+  if (!rawValue || rawValue.trim().length === 0) {
+    return defaultValue;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(ROOM_OPENCLAW_MESSAGES.invalidNonNegativeInteger(name));
+  }
+
+  return parsed;
+}
+
 // PORT 환경변수를 숫자로 파싱하고 유효성을 검증한다.
 function parsePort(rawPort: string | undefined): number {
   if (!rawPort) {
@@ -103,6 +140,34 @@ function parsePort(rawPort: string | undefined): number {
   return parsed;
 }
 
+// OpenClaw HTTP/재시도 관련 환경값을 로드한다.
+function loadOpenClawEnvironment(): OpenClawEnvironmentSubset {
+  const openClawApiKey = process.env.OPENCLAW_API_KEY?.trim();
+  const openClawApiPassword = process.env.OPENCLAW_API_PASSWORD?.trim();
+
+  return {
+    openClawApiBaseUrl: readRequiredEnvironmentVariable("OPENCLAW_API_BASE_URL"),
+    openClawApiKey: openClawApiKey || openClawApiPassword || readRequiredEnvironmentVariable("OPENCLAW_API_KEY"),
+    openClawModel: readRequiredEnvironmentVariable("OPENCLAW_MODEL"),
+    openClawAgentId: process.env.OPENCLAW_AGENT_ID?.trim() || ROOM_OPENCLAW_DEFAULTS.agentId,
+    openClawRequestTimeoutMs: parsePositiveIntegerEnvironmentVariable(
+      "OPENCLAW_REQUEST_TIMEOUT_MS",
+      process.env.OPENCLAW_REQUEST_TIMEOUT_MS,
+      ROOM_OPENCLAW_DEFAULTS.requestTimeoutMs
+    ),
+    openClawLiveReplyMaxRetries: parseNonNegativeIntegerEnvironmentVariable(
+      "OPENCLAW_LIVE_REPLY_MAX_RETRIES",
+      process.env.OPENCLAW_LIVE_REPLY_MAX_RETRIES,
+      ROOM_OPENCLAW_DEFAULTS.liveReplyMaxRetries
+    ),
+    openClawLiveReplyRetryDelayMs: parsePositiveIntegerEnvironmentVariable(
+      "OPENCLAW_LIVE_REPLY_RETRY_DELAY_MS",
+      process.env.OPENCLAW_LIVE_REPLY_RETRY_DELAY_MS,
+      ROOM_OPENCLAW_DEFAULTS.liveReplyRetryDelayMs
+    )
+  };
+}
+
 // 앱 구동에 필요한 환경값을 모두 로드한다.
 function loadAppEnvironment(): AppEnvironment {
   return {
@@ -111,16 +176,12 @@ function loadAppEnvironment(): AppEnvironment {
     roomStartChannelId: readRequiredEnvironmentVariable("ROOM_START_CHANNEL_ID"),
     roomLaunchChannelId: readRequiredEnvironmentVariable("ROOM_LAUNCH_CHANNEL_ID"),
     sqlitePath: readRequiredEnvironmentVariable("SQLITE_PATH"),
+    ...loadOpenClawEnvironment(),
     openClawEventsFilePath: process.env.OPENCLAW_EVENTS_FILE_PATH?.trim() || ROOM_OPENCLAW_DEFAULTS.eventsFilePath,
     roomModeTtlMinutes: parsePositiveIntegerEnvironmentVariable(
       "ROOM_MODE_TTL_MINUTES",
       process.env.ROOM_MODE_TTL_MINUTES,
       ROOM_OPENCLAW_DEFAULTS.modeTtlMinutes
-    ),
-    roomAutoSummaryMessageThreshold: parsePositiveIntegerEnvironmentVariable(
-      "ROOM_AUTO_SUMMARY_MESSAGE_THRESHOLD",
-      process.env.ROOM_AUTO_SUMMARY_MESSAGE_THRESHOLD,
-      ROOM_OPENCLAW_DEFAULTS.autoSummaryMessageThreshold
     ),
     roomAutoQuestionIntervalMinutes: parsePositiveIntegerEnvironmentVariable(
       "ROOM_AUTO_QUESTION_INTERVAL_MINUTES",
@@ -164,6 +225,7 @@ function createRoomCommandRuntime(input: {
   repositories: AppRepositories;
   environment: AppEnvironment;
   roomModeLifecycleService: RoomModeLifecycleService;
+  openClawChatClient: OpenClawChatClient;
   logger: ReturnType<typeof createLogger>;
 }): ReturnType<typeof createRoomCommandHandler> {
   return createRoomCommandHandler({
@@ -175,14 +237,9 @@ function createRoomCommandRuntime(input: {
       input.logger,
       {
         roomModeLifecycleService: input.roomModeLifecycleService,
-        roomModeTtlMinutes: input.environment.roomModeTtlMinutes
+        roomModeTtlMinutes: input.environment.roomModeTtlMinutes,
+        openClawChatClient: input.openClawChatClient
       }
-    ),
-    summarizeRoomSessionService: new SummarizeRoomSessionService(
-      input.repositories.roomSessionRepository,
-      input.repositories.briefingRepository,
-      input.repositories.workerRoundRepository,
-      input.logger
     ),
     launchRoomSessionService: new LaunchRoomSessionService({
       roomSessionRepository: input.repositories.roomSessionRepository,
@@ -192,6 +249,11 @@ function createRoomCommandRuntime(input: {
       roomModeLifecycleService: input.roomModeLifecycleService,
       logger: input.logger
     }),
+    stopRoomSessionService: new StopRoomSessionService(
+      input.repositories.roomSessionRepository,
+      input.roomModeLifecycleService,
+      input.logger
+    ),
     createSlackThreadPort: (client) => new SlackThreadAdapter(client),
     logger: input.logger
   });
@@ -205,16 +267,25 @@ async function createAppRuntime(): Promise<AppRuntime> {
   const sqliteClient = await initializePersistence(environment.sqlitePath);
 
   const repositories = createRepositories(sqliteClient);
+  let schedulerSlackChatClient: SlackChatClient | null = null;
   const openClawRuntime = createOpenClawRuntime({
     repositories,
     environment,
-    logger
+    logger,
+    createSchedulerSlackThreadPort: () => {
+      if (!schedulerSlackChatClient) {
+        return null;
+      }
+
+      return new SlackThreadAdapter(schedulerSlackChatClient);
+    }
   });
 
   const roomCommandHandler = createRoomCommandRuntime({
     repositories,
     environment,
     roomModeLifecycleService: openClawRuntime.roomModeLifecycleService,
+    openClawChatClient: openClawRuntime.openClawChatClient,
     logger
   });
 
@@ -222,17 +293,26 @@ async function createAppRuntime(): Promise<AppRuntime> {
     botToken: environment.slackBotToken,
     appToken: environment.slackAppToken,
     roomCommandHandler,
-    roomThreadMessageHandler: openClawRuntime.roomThreadEventHandler,
+    roomThreadMessageHandler: async (input) => {
+      await openClawRuntime.roomThreadEventHandler({
+        requestId: input.requestId,
+        event: input.event,
+        slackThreadPort: new SlackThreadAdapter(input.client)
+      });
+    },
     logLevel: environment.logLevel,
     logger
   });
+
+  schedulerSlackChatClient = app.client;
 
   return {
     app,
     sqliteClient,
     logger,
     environment,
-    openClawSchedulers: openClawRuntime.openClawSchedulers
+    openClawSchedulers: openClawRuntime.openClawSchedulers,
+    stopOpenClawRuntimeTasks: openClawRuntime.stopRuntimeTasks
   };
 }
 
@@ -245,8 +325,10 @@ function startOpenClawSchedulers(runtime: AppRuntime): void {
   runtime.logger.info(ROOM_LOG_EVENT_NAMES.openclawSchedulerStarted, {
     schedulerCount: runtime.openClawSchedulers.length,
     roomModeTtlMinutes: runtime.environment.roomModeTtlMinutes,
-    summaryThreshold: runtime.environment.roomAutoSummaryMessageThreshold,
     questionIntervalMinutes: runtime.environment.roomAutoQuestionIntervalMinutes,
+    requestTimeoutMs: runtime.environment.openClawRequestTimeoutMs,
+    maxRetries: runtime.environment.openClawLiveReplyMaxRetries,
+    retryDelayMs: runtime.environment.openClawLiveReplyRetryDelayMs,
     dispatchIntervalMs: runtime.environment.openClawOutboxDispatchIntervalMs,
     eventsFilePath: runtime.environment.openClawEventsFilePath
   });
@@ -257,6 +339,8 @@ async function stopOpenClawSchedulers(runtime: AppRuntime): Promise<void> {
   for (const scheduler of runtime.openClawSchedulers) {
     await scheduler.stop();
   }
+
+  await runtime.stopOpenClawRuntimeTasks();
 
   runtime.logger.info(ROOM_LOG_EVENT_NAMES.openclawSchedulerStopped, {
     schedulerCount: runtime.openClawSchedulers.length

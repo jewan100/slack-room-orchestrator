@@ -49,13 +49,14 @@ export class ManageRoomModeService implements RoomModeLifecycleService {
 
   // launch 성공 직후 planning watch target을 OFF로 전환하고 ROOM_MODE_OFF 이벤트를 enqueue한다.
   public async turnOffPlanningRoomMode(input: TurnOffPlanningRoomModeInput): Promise<void> {
+    const offReason = input.offReason ?? "LAUNCH";
     const watchTarget = await this.roomWatchTargetRepository.findOnWatchTargetBySessionId(input.session.id);
     if (!watchTarget) {
       this.logger.warn(ROOM_LOG_EVENT_NAMES.openclawRoomModeOffSkipped, {
         sessionId: input.session.id,
         channelId: input.session.startChannelId,
         threadTs: input.session.startThreadTs,
-        offReason: "LAUNCH",
+        offReason,
         reason: "watch_target_not_found"
       });
       return;
@@ -64,7 +65,7 @@ export class ManageRoomModeService implements RoomModeLifecycleService {
     const nowIso = new Date().toISOString();
     const turnedOff = await this.roomWatchTargetRepository.turnOffWatchTarget({
       watchTargetId: watchTarget.id,
-      offReason: "LAUNCH",
+      offReason,
       turnedOffAt: nowIso
     });
 
@@ -73,7 +74,7 @@ export class ManageRoomModeService implements RoomModeLifecycleService {
         sessionId: input.session.id,
         channelId: watchTarget.channelId,
         threadTs: watchTarget.threadTs,
-        offReason: "LAUNCH",
+        offReason,
         reason: "already_off"
       });
       return;
@@ -83,7 +84,7 @@ export class ManageRoomModeService implements RoomModeLifecycleService {
       createRoomModeOffEvent({
         session: input.session,
         watchTarget: turnedOff,
-        offReason: "LAUNCH",
+        offReason,
         occurredAt: nowIso
       })
     );
@@ -92,7 +93,7 @@ export class ManageRoomModeService implements RoomModeLifecycleService {
       sessionId: input.session.id,
       channelId: turnedOff.channelId,
       threadTs: turnedOff.threadTs,
-      offReason: "LAUNCH"
+      offReason
     });
   }
 }

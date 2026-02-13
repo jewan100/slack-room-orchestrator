@@ -1,27 +1,38 @@
 import { createRoomThreadEventHandler } from "../adapters/inbound/slack/roomThreadEventHandler";
+import { OpenclawChatCompletionsAdapter } from "../adapters/outbound/openclaw/openclawChatCompletionsAdapter";
 import { OpenclawEventFileAdapter } from "../adapters/outbound/openclaw/openclawEventFileAdapter";
 import { ROOM_LOG_EVENT_NAMES, ROOM_OPENCLAW_DEFAULTS, ROOM_OPENCLAW_MESSAGES } from "../shared/messages";
 import type { Logger } from "../shared/logger";
 import type {
+  OpenClawChatClient,
   OpenClawEventOutboxRepository,
   RoomModeLifecycleService,
   RoomSessionRepository,
   RoomThreadMessageRepository,
-  RoomWatchTargetRepository
+  RoomWatchTargetRepository,
+  SlackThreadPort
 } from "../shared/types";
 import { DispatchOpenclawOutboxService } from "../services/openclaw/dispatchOpenclawOutboxService";
 import { EmitQuestionTriggerService } from "../services/openclaw/emitQuestionTriggerService";
 import { ExpireRoomModeService } from "../services/openclaw/expireRoomModeService";
 import { IngestRoomThreadMessageService } from "../services/openclaw/ingestRoomThreadMessageService";
+import { LiveReplyToRoomThreadService } from "../services/openclaw/liveReplyToRoomThreadService";
 import { ManageRoomModeService } from "../services/openclaw/manageRoomModeService";
 import { OpenClawIntervalRunner } from "../services/openclaw/openClawIntervalRunner";
 
 // OpenClaw 런타임 조립에 필요한 환경값 모델
 export interface OpenClawRuntimeEnvironment {
   openClawEventsFilePath: string;
-  roomAutoSummaryMessageThreshold: number;
+  roomModeTtlMinutes: number;
   roomAutoQuestionIntervalMinutes: number;
   openClawOutboxDispatchIntervalMs: number;
+  openClawApiBaseUrl: string;
+  openClawApiKey: string;
+  openClawModel: string;
+  openClawAgentId: string;
+  openClawRequestTimeoutMs: number;
+  openClawLiveReplyMaxRetries: number;
+  openClawLiveReplyRetryDelayMs: number;
 }
 
 // OpenClaw 런타임 조립에 필요한 저장소 포트 모델
@@ -36,7 +47,9 @@ export interface OpenClawRuntimeRepositories {
 export interface OpenClawRuntimeComponents {
   roomModeLifecycleService: RoomModeLifecycleService;
   roomThreadEventHandler: ReturnType<typeof createRoomThreadEventHandler>;
+  openClawChatClient: OpenClawChatClient;
   openClawSchedulers: OpenClawIntervalRunner[];
+  stopRuntimeTasks: () => Promise<void>;
 }
 
 // OpenClaw 백그라운드 서비스 묶음 모델
@@ -108,17 +121,20 @@ function createOpenClawBackgroundServices(input: {
   repositories: OpenClawRuntimeRepositories;
   environment: OpenClawRuntimeEnvironment;
   logger: Logger;
+  createSlackThreadPort: (() => SlackThreadPort | null) | undefined;
 }): OpenClawBackgroundServices {
   const openClawEventSink = new OpenclawEventFileAdapter(input.environment.openClawEventsFilePath);
+  const expireRoomModeService = new ExpireRoomModeService({
+    roomWatchTargetRepository: input.repositories.roomWatchTargetRepository,
+    roomSessionRepository: input.repositories.roomSessionRepository,
+    openClawEventOutboxRepository: input.repositories.openClawEventOutboxRepository,
+    ...(input.createSlackThreadPort ? { createSlackThreadPort: input.createSlackThreadPort } : {}),
+    batchSize: ROOM_OPENCLAW_DEFAULTS.lifecycleBatchSize,
+    logger: input.logger
+  });
 
   return {
-    expireRoomModeService: new ExpireRoomModeService({
-      roomWatchTargetRepository: input.repositories.roomWatchTargetRepository,
-      roomSessionRepository: input.repositories.roomSessionRepository,
-      openClawEventOutboxRepository: input.repositories.openClawEventOutboxRepository,
-      batchSize: ROOM_OPENCLAW_DEFAULTS.lifecycleBatchSize,
-      logger: input.logger
-    }),
+    expireRoomModeService,
     emitQuestionTriggerService: new EmitQuestionTriggerService({
       roomWatchTargetRepository: input.repositories.roomWatchTargetRepository,
       roomSessionRepository: input.repositories.roomSessionRepository,
@@ -137,43 +153,101 @@ function createOpenClawBackgroundServices(input: {
   };
 }
 
+// OpenClaw Chat HTTP 클라이언트를 조립한다.
+function createOpenClawChatClient(input: {
+  environment: OpenClawRuntimeEnvironment;
+  logger: Logger;
+}): OpenclawChatCompletionsAdapter {
+  return new OpenclawChatCompletionsAdapter({
+    apiBaseUrl: input.environment.openClawApiBaseUrl,
+    apiKey: input.environment.openClawApiKey,
+    model: input.environment.openClawModel,
+    agentId: input.environment.openClawAgentId,
+    requestTimeoutMs: input.environment.openClawRequestTimeoutMs,
+    logger: input.logger
+  });
+}
+
+// 실시간 답변 서비스를 조립한다.
+function createRoomLiveReplyService(input: {
+  repositories: OpenClawRuntimeRepositories;
+  environment: OpenClawRuntimeEnvironment;
+  openClawChatClient: OpenClawChatClient;
+  logger: Logger;
+}): LiveReplyToRoomThreadService {
+  return new LiveReplyToRoomThreadService({
+    roomWatchTargetRepository: input.repositories.roomWatchTargetRepository,
+    openClawChatClient: input.openClawChatClient,
+    logger: input.logger,
+    maxRetries: input.environment.openClawLiveReplyMaxRetries,
+    retryDelayMs: input.environment.openClawLiveReplyRetryDelayMs,
+    systemMessage: ROOM_OPENCLAW_MESSAGES.liveReplySystemPrompt
+  });
+}
+
+// 스레드 메시지 수집 서비스를 조립한다.
+function createRoomThreadMessageIngestService(input: {
+  repositories: OpenClawRuntimeRepositories;
+  environment: OpenClawRuntimeEnvironment;
+  logger: Logger;
+}): IngestRoomThreadMessageService {
+  return new IngestRoomThreadMessageService({
+    roomWatchTargetRepository: input.repositories.roomWatchTargetRepository,
+    roomThreadMessageRepository: input.repositories.roomThreadMessageRepository,
+    roomModeTtlMinutes: input.environment.roomModeTtlMinutes,
+    logger: input.logger
+  });
+}
+
 // OpenClaw 연동 서비스/핸들러/스케줄러를 조립한다.
 export function createOpenClawRuntime(input: {
   repositories: OpenClawRuntimeRepositories;
   environment: OpenClawRuntimeEnvironment;
   logger: Logger;
+  createSchedulerSlackThreadPort?: () => SlackThreadPort | null;
 }): OpenClawRuntimeComponents {
+  const openClawChatClient = createOpenClawChatClient({
+    environment: input.environment,
+    logger: input.logger
+  });
+
+  const roomLiveReplyService = createRoomLiveReplyService({
+    repositories: input.repositories,
+    environment: input.environment,
+    openClawChatClient,
+    logger: input.logger
+  });
+
   const roomModeLifecycleService = new ManageRoomModeService(
     input.repositories.roomWatchTargetRepository,
     input.repositories.openClawEventOutboxRepository,
     input.logger
   );
 
-  const roomThreadMessageIngestService = new IngestRoomThreadMessageService({
-    roomWatchTargetRepository: input.repositories.roomWatchTargetRepository,
-    roomThreadMessageRepository: input.repositories.roomThreadMessageRepository,
-    roomSessionRepository: input.repositories.roomSessionRepository,
-    openClawEventOutboxRepository: input.repositories.openClawEventOutboxRepository,
-    summaryMessageThreshold: input.environment.roomAutoSummaryMessageThreshold,
-    logger: input.logger
-  });
+  const roomThreadMessageIngestService = createRoomThreadMessageIngestService(input);
 
   const backgroundServices = createOpenClawBackgroundServices({
     repositories: input.repositories,
     environment: input.environment,
-    logger: input.logger
+    logger: input.logger,
+    createSlackThreadPort: input.createSchedulerSlackThreadPort
   });
 
   return {
     roomModeLifecycleService,
     roomThreadEventHandler: createRoomThreadEventHandler({
       roomThreadMessageIngestService,
+      roomLiveReplyService,
       logger: input.logger
     }),
+    openClawChatClient,
     openClawSchedulers: createOpenClawSchedulers({
       environment: input.environment,
       logger: input.logger,
       backgroundServices
-    })
+    }),
+    stopRuntimeTasks: async () => {
+      await roomLiveReplyService.stop();
+    }
   };
 }

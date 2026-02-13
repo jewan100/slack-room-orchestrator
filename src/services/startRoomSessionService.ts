@@ -1,19 +1,25 @@
-import { ROOM_COMMAND_NAMES, ROOM_LOG_EVENT_NAMES, ROOM_START_SERVICE_MESSAGES } from "../shared/messages";
+import {
+  ROOM_COMMAND_NAMES,
+  ROOM_LOG_EVENT_NAMES,
+  ROOM_OPENCLAW_MESSAGES,
+  ROOM_START_SERVICE_CONSTANTS,
+  ROOM_START_SERVICE_MESSAGES
+} from "../shared/messages";
 import { ROOM_ERROR_CODES } from "../shared/errorCodes";
 import type { Logger } from "../shared/logger";
 import { RoomCommandError } from "../shared/roomCommandError";
 import type {
   BriefingRepository,
+  OpenClawChatClient,
   RoomModeLifecycleService,
   RoomSession,
   RoomSessionRepository,
   SlackThreadPort
 } from "../shared/types";
-import { ensureNoActiveSession, validateStartTopic } from "../validators/roomCommandValidator";
+import { ensureNoActiveSession } from "../validators/roomCommandValidator";
 
 // start 유스케이스 입력 모델
 export interface StartRoomSessionInput {
-  topic: string;
   requestedByUserId: string;
   workspaceId: string;
   startChannelId: string;
@@ -28,6 +34,7 @@ export interface StartRoomSessionResult {
 export interface StartRoomSessionOpenClawOptions {
   roomModeLifecycleService: RoomModeLifecycleService;
   roomModeTtlMinutes: number;
+  openClawChatClient?: OpenClawChatClient;
 }
 
 // sqlite 예외 객체에서 사용할 수 있는 구조화 필드 타입
@@ -43,7 +50,7 @@ function extractErrorMessage(error: unknown): string {
     return error.message;
   }
 
-  return ROOM_START_SERVICE_MESSAGES.followupNoticeUnknownError;
+  return ROOM_START_SERVICE_CONSTANTS.followupNoticeUnknownError;
 }
 
 // unknown 예외에서 sqlite 구조화 필드를 안전하게 추출한다.
@@ -74,19 +81,19 @@ function isAlreadyRunningConstraintError(error: unknown): boolean {
 
   // sqlite 에러 코드/errno를 먼저 확인해 unique 제약 충돌 후보를 좁힌다.
   const isConstraintError =
-    metadata.code === ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrorCode ||
-    metadata.code === ROOM_START_SERVICE_MESSAGES.sqliteConstraintUniqueErrorCode ||
-    metadata.errno === ROOM_START_SERVICE_MESSAGES.sqliteConstraintErrno;
+    metadata.code === ROOM_START_SERVICE_CONSTANTS.sqliteConstraintErrorCode ||
+    metadata.code === ROOM_START_SERVICE_CONSTANTS.sqliteConstraintUniqueErrorCode ||
+    metadata.errno === ROOM_START_SERVICE_CONSTANTS.sqliteConstraintErrno;
 
   if (!isConstraintError || !metadata.message) {
     return false;
   }
 
   return (
-    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeSessionConstraintIndexName) ||
-    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeSessionConstraintColumnName) ||
-    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeWatchTargetConstraintIndexName) ||
-    metadata.message.includes(ROOM_START_SERVICE_MESSAGES.activeWatchTargetConstraintColumnName)
+    metadata.message.includes(ROOM_START_SERVICE_CONSTANTS.activeSessionConstraintIndexName) ||
+    metadata.message.includes(ROOM_START_SERVICE_CONSTANTS.activeSessionConstraintColumnName) ||
+    metadata.message.includes(ROOM_START_SERVICE_CONSTANTS.activeWatchTargetConstraintIndexName) ||
+    metadata.message.includes(ROOM_START_SERVICE_CONSTANTS.activeWatchTargetConstraintColumnName)
   );
 }
 
@@ -101,6 +108,11 @@ function normalizeStartFlowError(error: unknown): unknown {
   }
 
   return error;
+}
+
+// room 세션 단위 OpenClaw 연속 대화키를 구성한다.
+function buildRoomSessionKey(sessionId: string): string {
+  return `room:${sessionId}`;
 }
 
 // `/room start` 유스케이스 오케스트레이션 서비스
@@ -121,7 +133,7 @@ export class StartRoomSessionService {
         requestedByUserId: input.requestedByUserId,
         workspaceId: input.workspaceId,
         startChannelId: input.startChannelId,
-        startThreadTs: ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+        startThreadTs: ROOM_START_SERVICE_CONSTANTS.pendingStartThreadTs
       });
     } catch (error) {
       // 저장소 unique 충돌은 도메인 에러코드(ROOM_ALREADY_RUNNING)로 정규화한다.
@@ -142,7 +154,7 @@ export class StartRoomSessionService {
   ): Promise<void> {
     const rollbackCandidates = [
       currentStartThreadTs,
-      ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs
+      ROOM_START_SERVICE_CONSTANTS.pendingStartThreadTs
     ];
 
     try {
@@ -191,87 +203,219 @@ export class StartRoomSessionService {
     });
   }
 
-  // 후속 안내 메시지 실패는 start 성공 여부와 분리해 처리한다.
-  private async postFollowupNotice(
+  // start 흐름 내부 단계별 처리 시간을 표준 포맷으로 기록한다.
+  private logStartPhaseCompletion(input: {
+    phase: string;
+    channelId: string;
+    elapsedMs: number;
+    sessionId?: string | null;
+  }): void {
+    this.logger.info(ROOM_LOG_EVENT_NAMES.roomStartPhaseCompleted, {
+      phase: input.phase,
+      channelId: input.channelId,
+      command: ROOM_COMMAND_NAMES.start,
+      sessionId: input.sessionId ?? null,
+      elapsedMs: input.elapsedMs
+    });
+  }
+
+  // start 단계 실행 시간을 측정하고 완료 로그를 남긴다.
+  private async runStartPhaseWithTiming<T>(input: {
+    phase: string;
+    channelId: string;
+    sessionId?: string | null;
+    action: () => Promise<T>;
+  }): Promise<T> {
+    const phaseStartedAt = Date.now();
+    const result = await input.action();
+    const phaseLogInput = {
+      phase: input.phase,
+      channelId: input.channelId,
+      elapsedMs: Date.now() - phaseStartedAt
+    };
+    this.logStartPhaseCompletion(
+      input.sessionId === undefined ? phaseLogInput : { ...phaseLogInput, sessionId: input.sessionId }
+    );
+    return result;
+  }
+
+  // 주제 미입력 start에서 택배의 첫 질문 메시지를 생성해 스레드에 전송한다.
+  // 실패 시에는 중앙 fallback 문구로 최소 안내를 남긴다.
+  private async postAutoKickoffNotice(
     slackThreadPort: SlackThreadPort,
     input: StartRoomSessionInput,
-    sessionId: string,
+    session: RoomSession,
     threadTs: string
   ): Promise<void> {
+    const openClawChatClient = this.openClawOptions?.openClawChatClient;
+
     try {
+      const kickoffText = openClawChatClient
+        ? await openClawChatClient.complete({
+            sessionKey: buildRoomSessionKey(session.id),
+            systemMessage: ROOM_OPENCLAW_MESSAGES.startKickoffSystemPrompt,
+            userMessage: ROOM_OPENCLAW_MESSAGES.startKickoffUserPrompt,
+            userId: input.requestedByUserId
+          })
+        : ROOM_START_SERVICE_MESSAGES.kickoffFallbackNotice;
+
       await slackThreadPort.postMessageInThread({
         channelId: input.startChannelId,
         threadTs,
-        text: ROOM_START_SERVICE_MESSAGES.briefingSavedNotice
+        text: kickoffText
       });
     } catch (error) {
-      this.logger.warn(ROOM_LOG_EVENT_NAMES.roomStartFollowupNoticeFailed, {
-        sessionId,
+      this.logger.warn(ROOM_LOG_EVENT_NAMES.roomStartKickoffNoticeFailed, {
+        sessionId: session.id,
         channelId: input.startChannelId,
         command: ROOM_COMMAND_NAMES.start,
         errorMessage: extractErrorMessage(error)
       });
+
+      if (!openClawChatClient) {
+        return;
+      }
+
+      try {
+        await slackThreadPort.postMessageInThread({
+          channelId: input.startChannelId,
+          threadTs,
+          text: ROOM_START_SERVICE_MESSAGES.kickoffFallbackNotice
+        });
+      } catch (fallbackError) {
+        this.logger.warn(ROOM_LOG_EVENT_NAMES.roomStartKickoffNoticeFailed, {
+          sessionId: session.id,
+          channelId: input.startChannelId,
+          command: ROOM_COMMAND_NAMES.start,
+          errorMessage: extractErrorMessage(fallbackError)
+        });
+      }
     }
   }
 
+  // start 스레드를 생성하고 PREPARED 세션에 thread 식별자를 반영한다.
+  private async createAndBindStartThread(input: {
+    startChannelId: string;
+    reservedSessionId: string;
+    slackThreadPort: SlackThreadPort;
+  }): Promise<{ session: RoomSession; threadTs: string }> {
+    const thread = await this.runStartPhaseWithTiming({
+      phase: "create_start_thread",
+      channelId: input.startChannelId,
+      sessionId: input.reservedSessionId,
+      action: async () => {
+        return input.slackThreadPort.createThread({
+          channelId: input.startChannelId,
+          text: ROOM_START_SERVICE_MESSAGES.preparedThreadText
+        });
+      }
+    });
+
+    const session = await this.runStartPhaseWithTiming({
+      phase: "bind_start_thread",
+      channelId: input.startChannelId,
+      sessionId: input.reservedSessionId,
+      action: async () => {
+        return this.roomSessionRepository.updatePreparedSessionStartThread({
+          sessionId: input.reservedSessionId,
+          startThreadTs: thread.threadTs
+        });
+      }
+    });
+
+    return {
+      session,
+      threadTs: thread.threadTs
+    };
+  }
+
+  // start 후반 단계(kickoff/briefing/mode ON)와 완료 로그를 처리한다.
+  private async finalizeStartSession(input: {
+    startInput: StartRoomSessionInput;
+    session: RoomSession;
+    threadTs: string;
+    slackThreadPort: SlackThreadPort;
+    flowStartedAt: number;
+  }): Promise<void> {
+    await this.runStartPhaseWithTiming({
+      phase: "post_kickoff_notice",
+      channelId: input.startInput.startChannelId,
+      sessionId: input.session.id,
+      action: async () => {
+        await this.postAutoKickoffNotice(input.slackThreadPort, input.startInput, input.session, input.threadTs);
+      }
+    });
+
+    await this.runStartPhaseWithTiming({
+      phase: "save_briefing",
+      channelId: input.startInput.startChannelId,
+      sessionId: input.session.id,
+      action: async () => {
+        await this.briefingRepository.createBriefing({
+          sessionId: input.session.id,
+          goal: ROOM_START_SERVICE_MESSAGES.briefingGoal,
+          constraints: ROOM_START_SERVICE_MESSAGES.briefingConstraints,
+          successCriteria: ROOM_START_SERVICE_MESSAGES.briefingSuccessCriteria
+        });
+      }
+    });
+
+    await this.runStartPhaseWithTiming({
+      phase: "turn_on_planning_room_mode",
+      channelId: input.startInput.startChannelId,
+      sessionId: input.session.id,
+      action: async () => {
+        await this.turnOnPlanningRoomMode(input.session);
+      }
+    });
+
+    this.logger.info(ROOM_LOG_EVENT_NAMES.roomStartCompleted, {
+      sessionId: input.session.id,
+      channelId: input.startInput.startChannelId,
+      command: ROOM_COMMAND_NAMES.start,
+      elapsedMs: Date.now() - input.flowStartedAt
+    });
+  }
+
   // start 명령 전체 흐름:
-  // 1) 입력 검증 2) 활성 세션 중복 검사 3) PREPARED 세션 선점
-  // 4) 준비 스레드 생성 5) 브리핑 저장 6) OpenClaw mode ON enqueue 7) 후속 액션 안내
+  // 1) 활성 세션 중복 검사 2) PREPARED 세션 선점 3) 준비 스레드 생성
+  // 4) kickoff 질문 전송 5) 브리핑 저장 6) OpenClaw mode ON enqueue
   public async execute(input: StartRoomSessionInput, slackThreadPort: SlackThreadPort): Promise<StartRoomSessionResult> {
-    // 사용자가 입력한 주제를 정규화(trim)하고 빈 값이면 예외를 발생시킨다.
-    const topic = validateStartTopic(input.topic);
-
-    // 같은 시작 채널에 이미 활성 세션이 있는지 조회한다.
-    // DB 조회 결과를 기다려야 이후 중복 생성 여부를 정확히 판단할 수 있다.
-    const activeSession = await this.roomSessionRepository.findActiveSessionByStartChannel(input.startChannelId);
-
-    // 활성 세션이 있으면 start를 중단한다(ROOM_ALREADY_RUNNING).
+    const flowStartedAt = Date.now();
+    const topic = ROOM_START_SERVICE_CONSTANTS.autoGeneratedTopic;
+    const activeSession = await this.runStartPhaseWithTiming({
+      phase: "find_active_session",
+      channelId: input.startChannelId,
+      action: async () => this.roomSessionRepository.findActiveSessionByStartChannel(input.startChannelId)
+    });
     ensureNoActiveSession(activeSession);
 
-    // DB에서 PREPARED 세션을 먼저 선점해 동시 start 경쟁 구간을 축소한다.
-    const reservedSession = await this.createReservedPreparedSession(input, topic);
-    let currentStartThreadTs: string = ROOM_START_SERVICE_MESSAGES.pendingStartThreadTs;
+    const reservedSession = await this.runStartPhaseWithTiming({
+      phase: "reserve_prepared_session",
+      channelId: input.startChannelId,
+      action: async () => this.createReservedPreparedSession(input, topic)
+    });
+    let currentStartThreadTs: string = ROOM_START_SERVICE_CONSTANTS.pendingStartThreadTs;
 
     try {
-      // start 채널에 준비 스레드(루트 메시지)를 만든다.
-      const thread = await slackThreadPort.createThread({
-        channelId: input.startChannelId,
-        text: ROOM_START_SERVICE_MESSAGES.preparedThreadText(topic)
+      const prepared = await this.createAndBindStartThread({
+        startChannelId: input.startChannelId,
+        reservedSessionId: reservedSession.id,
+        slackThreadPort
       });
-      currentStartThreadTs = thread.threadTs;
+      currentStartThreadTs = prepared.threadTs;
 
-      // 예약 세션에 실제 start 스레드 식별자를 반영한다.
-      const session = await this.roomSessionRepository.updatePreparedSessionStartThread({
-        sessionId: reservedSession.id,
-        startThreadTs: thread.threadTs
-      });
-
-      // 브리핑 템플릿을 별도 테이블에 저장한다.
-      await this.briefingRepository.createBriefing({
-        sessionId: session.id,
-        goal: ROOM_START_SERVICE_MESSAGES.briefingGoal(topic),
-        constraints: ROOM_START_SERVICE_MESSAGES.briefingConstraints,
-        successCriteria: ROOM_START_SERVICE_MESSAGES.briefingSuccessCriteria
+      await this.finalizeStartSession({
+        startInput: input,
+        session: prepared.session,
+        threadTs: prepared.threadTs,
+        slackThreadPort,
+        flowStartedAt
       });
 
-      // OpenClaw가 해당 스레드를 감시할 수 있도록 mode ON 이벤트를 적재한다.
-      await this.turnOnPlanningRoomMode(session);
-
-      // 사용자 편의를 위한 후속 안내는 best-effort로 전송한다.
-      await this.postFollowupNotice(slackThreadPort, input, session.id, thread.threadTs);
-
-      // 완료 로그를 남겨 운영자가 request/session 단위로 추적할 수 있게 한다.
-      this.logger.info(ROOM_LOG_EVENT_NAMES.roomStartCompleted, {
-        sessionId: session.id,
-        channelId: input.startChannelId,
-        command: ROOM_COMMAND_NAMES.start
-      });
-
-      // 호출자(핸들러)에서 응답 메시지를 조립할 수 있도록 세션 정보를 반환한다.
-      return { session };
+      return { session: prepared.session };
     } catch (error) {
       const normalizedError = normalizeStartFlowError(error);
-      // start 후반 실패 시 선점된 세션을 정리해 재시도 가능 상태를 복구한다.
       await this.rollbackReservedSession(reservedSession.id, input.startChannelId, normalizedError, currentStartThreadTs);
       throw normalizedError;
     }

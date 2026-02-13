@@ -8,11 +8,10 @@ export type OpenClawEventProtocolVersion = typeof OPENCLAW_EVENT_PROTOCOL_VERSIO
 export type OpenClawRoomEventType =
   | "ROOM_MODE_ON"
   | "ROOM_MODE_OFF"
-  | "ROOM_SUMMARY_TRIGGER"
   | "ROOM_QUESTION_TRIGGER";
 
 // room 모드 OFF 사유
-export type RoomModeOffReason = "LAUNCH" | "TTL";
+export type RoomModeOffReason = "LAUNCH" | "TTL" | "MANUAL";
 
 // watch target 상태
 export type RoomWatchTargetStatus = "ON" | "OFF";
@@ -45,12 +44,6 @@ export interface RoomModeOffEvent extends OpenClawRoomEventBase {
   offReason: RoomModeOffReason;
 }
 
-// 자동 summary 트리거 이벤트
-export interface RoomSummaryTriggerEvent extends OpenClawRoomEventBase {
-  eventType: "ROOM_SUMMARY_TRIGGER";
-  messageCount: number;
-}
-
 // 자동 question 트리거 이벤트
 export interface RoomQuestionTriggerEvent extends OpenClawRoomEventBase {
   eventType: "ROOM_QUESTION_TRIGGER";
@@ -61,7 +54,6 @@ export interface RoomQuestionTriggerEvent extends OpenClawRoomEventBase {
 export type OpenClawRoomEvent =
   | RoomModeOnEvent
   | RoomModeOffEvent
-  | RoomSummaryTriggerEvent
   | RoomQuestionTriggerEvent;
 
 // room_watch_targets 도메인 모델
@@ -74,7 +66,6 @@ export interface RoomWatchTarget {
   mode: RoomWatchMode;
   ttlExpiresAt: string;
   messageCount: number;
-  lastSummaryTriggeredCount: number;
   lastQuestionTriggeredAt: string | null;
   turnedOnAt: string;
   turnedOffAt: string | null;
@@ -114,4 +105,3 @@ export interface OpenClawEventOutboxItem {
   dispatchedAt: string | null;
   lastError: string | null;
 }
-

@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS room_watch_targets (
   mode TEXT NOT NULL CHECK (mode IN ('PLANNING')),
   ttl_expires_at TEXT NOT NULL,
   message_count INTEGER NOT NULL DEFAULT 0,
-  last_summary_triggered_count INTEGER NOT NULL DEFAULT 0,
   last_question_triggered_at TEXT,
   turned_on_at TEXT NOT NULL,
   turned_off_at TEXT,
@@ -60,7 +59,6 @@ CREATE TABLE IF NOT EXISTS openclaw_event_outbox (
   event_type TEXT NOT NULL CHECK (event_type IN (
     'ROOM_MODE_ON',
     'ROOM_MODE_OFF',
-    'ROOM_SUMMARY_TRIGGER',
     'ROOM_QUESTION_TRIGGER'
   )),
   session_id TEXT NOT NULL,

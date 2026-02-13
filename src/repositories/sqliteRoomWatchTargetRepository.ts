@@ -19,7 +19,6 @@ interface RoomWatchTargetRow {
   mode: "PLANNING";
   ttl_expires_at: string;
   message_count: number;
-  last_summary_triggered_count: number;
   last_question_triggered_at: string | null;
   turned_on_at: string;
   turned_off_at: string | null;
@@ -41,9 +40,9 @@ export class SqliteRoomWatchTargetRepository implements RoomWatchTargetRepositor
       `
       INSERT INTO room_watch_targets (
         id, session_id, channel_id, thread_ts, status, mode, ttl_expires_at,
-        message_count, last_summary_triggered_count, last_question_triggered_at,
+        message_count, last_question_triggered_at,
         turned_on_at, turned_off_at, off_reason, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'ON', ?, ?, 0, 0, NULL, ?, NULL, NULL, ?, ?)
+      ) VALUES (?, ?, ?, ?, 'ON', ?, ?, 0, NULL, ?, NULL, NULL, ?, ?)
     `,
       id,
       input.sessionId,
@@ -203,20 +202,35 @@ export class SqliteRoomWatchTargetRepository implements RoomWatchTargetRepositor
   }
 
   // 신규 메시지가 들어올 때 ON 대상의 message_count를 1 증가시킨다.
-  public async incrementMessageCount(watchTargetId: string): Promise<RoomWatchTarget> {
+  // ttlExpiresAt이 전달되면 비활성 만료 기준을 "마지막 메시지 기준"으로 갱신한다.
+  public async incrementMessageCount(watchTargetId: string, ttlExpiresAt?: string): Promise<RoomWatchTarget> {
     const now = new Date().toISOString();
 
-    const result = await this.db.run(
-      `
-      UPDATE room_watch_targets
-      SET message_count = message_count + 1,
-          updated_at = ?
-      WHERE id = ?
-        AND status = 'ON'
-    `,
-      now,
-      watchTargetId
-    );
+    const result = ttlExpiresAt
+      ? await this.db.run(
+          `
+          UPDATE room_watch_targets
+          SET message_count = message_count + 1,
+              ttl_expires_at = ?,
+              updated_at = ?
+          WHERE id = ?
+            AND status = 'ON'
+        `,
+          ttlExpiresAt,
+          now,
+          watchTargetId
+        )
+      : await this.db.run(
+          `
+          UPDATE room_watch_targets
+          SET message_count = message_count + 1,
+              updated_at = ?
+          WHERE id = ?
+            AND status = 'ON'
+        `,
+          now,
+          watchTargetId
+        );
 
     if (result.changes !== 1) {
       throw new Error(ROOM_SQLITE_MESSAGES.incrementWatchTargetMessageCountFailed);
@@ -225,40 +239,6 @@ export class SqliteRoomWatchTargetRepository implements RoomWatchTargetRepositor
     const updated = await this.findById(watchTargetId);
     if (!updated) {
       throw new Error(ROOM_SQLITE_MESSAGES.incrementWatchTargetMessageCountFailed);
-    }
-
-    return updated;
-  }
-
-  // summary 임계치를 넘은 경우 last_summary_triggered_count를 선점한다.
-  // 선점 성공 시에만 summary trigger 이벤트를 enqueue해야 중복 발행을 막을 수 있다.
-  public async claimSummaryTriggerIfReached(
-    watchTargetId: string,
-    threshold: number,
-    triggeredAt: string
-  ): Promise<RoomWatchTarget | null> {
-    const result = await this.db.run(
-      `
-      UPDATE room_watch_targets
-      SET last_summary_triggered_count = last_summary_triggered_count + ?,
-          updated_at = ?
-      WHERE id = ?
-        AND status = 'ON'
-        AND message_count >= last_summary_triggered_count + ?
-    `,
-      threshold,
-      triggeredAt,
-      watchTargetId,
-      threshold
-    );
-
-    if (result.changes === 0) {
-      return null;
-    }
-
-    const updated = await this.findById(watchTargetId);
-    if (!updated) {
-      throw new Error(ROOM_SQLITE_MESSAGES.claimSummaryTriggerFailed);
     }
 
     return updated;
@@ -326,7 +306,6 @@ export class SqliteRoomWatchTargetRepository implements RoomWatchTargetRepositor
       mode: row.mode,
       ttlExpiresAt: row.ttl_expires_at,
       messageCount: row.message_count,
-      lastSummaryTriggeredCount: row.last_summary_triggered_count,
       lastQuestionTriggeredAt: row.last_question_triggered_at,
       turnedOnAt: row.turned_on_at,
       turnedOffAt: row.turned_off_at,

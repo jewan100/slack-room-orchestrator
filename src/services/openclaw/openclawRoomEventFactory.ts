@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
   OPENCLAW_EVENT_PROTOCOL_VERSION,
+  type RoomModeOffReason,
   type RoomModeOffEvent,
   type RoomModeOnEvent,
   type RoomQuestionTriggerEvent,
-  type RoomSummaryTriggerEvent,
   type RoomWatchTarget
 } from "../../shared/openclawSyncTypes";
 import type { RoomSession } from "../../shared/types";
@@ -53,26 +53,13 @@ export function createRoomModeOnEvent(input: {
 export function createRoomModeOffEvent(input: {
   session: RoomSession;
   watchTarget: RoomWatchTarget;
-  offReason: "LAUNCH" | "TTL";
+  offReason: RoomModeOffReason;
   occurredAt: string;
 }): RoomModeOffEvent {
   return {
     eventType: "ROOM_MODE_OFF",
     ...createBaseEventFields(input),
     offReason: input.offReason
-  };
-}
-
-// ROOM_SUMMARY_TRIGGER 이벤트를 생성한다.
-export function createRoomSummaryTriggerEvent(input: {
-  session: RoomSession;
-  watchTarget: RoomWatchTarget;
-  occurredAt: string;
-}): RoomSummaryTriggerEvent {
-  return {
-    eventType: "ROOM_SUMMARY_TRIGGER",
-    ...createBaseEventFields(input),
-    messageCount: input.watchTarget.messageCount
   };
 }
 
