@@ -12,7 +12,8 @@ export function buildRoomHelpMessage(): string {
   return [ROOM_COMMAND_MESSAGES.helpIntro, "", buildRoomCommandUsage()].join("\n");
 }
 
-// 공통 오류 포맷을 만든다.
-export function formatCommandErrorMessage(code: RoomErrorCode, message?: string): string {
+// 공통 에러코드에 대응하는 사용자 문구를 정규화한다.
+// message를 주면 그 값을 우선하고, 없으면 중앙 카탈로그의 기본 문구를 사용한다.
+export function resolveRoomCommandErrorText(code: RoomErrorCode, message?: string): string {
   return message ?? ROOM_ERROR_TEXTS_BY_CODE[code];
 }

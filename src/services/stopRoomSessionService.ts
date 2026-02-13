@@ -23,20 +23,20 @@ export class StopRoomSessionService {
   ) {}
 
   // stop 흐름:
-  // 1) 활성 세션 조회 2) DECIDED 전이 3) planning mode OFF(MANUAL) 4) 완료 로그 기록
+  // 1) 활성 세션 조회 2) planning mode OFF(MANUAL) 3) DECIDED 전이 4) 완료 로그 기록
   public async execute(input: StopRoomSessionInput): Promise<StopRoomSessionResult> {
     const activeSession = ensureActiveSession(
       await this.roomSessionRepository.findActiveSessionByStartChannel(input.startChannelId)
     );
 
+    await this.roomModeLifecycleService.turnOffPlanningRoomMode({
+      session: activeSession,
+      offReason: "MANUAL"
+    });
+
     const decidedSession = await this.roomSessionRepository.updateSessionToDecided({
       sessionId: activeSession.id,
       decidedOption: null
-    });
-
-    await this.roomModeLifecycleService.turnOffPlanningRoomMode({
-      session: decidedSession,
-      offReason: "MANUAL"
     });
 
     this.logger.info(ROOM_LOG_EVENT_NAMES.roomStopCompleted, {

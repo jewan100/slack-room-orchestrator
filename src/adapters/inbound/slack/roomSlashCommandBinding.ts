@@ -1,7 +1,7 @@
 import type { App } from "@slack/bolt";
 import type { ActionsBlock } from "@slack/types";
 import { parseRoomCommand } from "../../../commands/roomCommandRouter";
-import { buildRoomHelpMessage, formatCommandErrorMessage } from "../../../commands/roomCommandUsage";
+import { buildRoomHelpMessage, resolveRoomCommandErrorText } from "../../../commands/roomCommandUsage";
 import { ROOM_ACTION_IDS, ROOM_COMMAND_MESSAGES, ROOM_LOG_EVENT_NAMES, ROOM_SLASH_COMMAND } from "../../../shared/messages";
 import { normalizeRoomCommandError } from "../../../shared/roomCommandError";
 import type { ParsedRoomCommand, RoomCommandRequest, SlackChatClient } from "../../../shared/types";
@@ -125,7 +125,7 @@ function buildErrorReplaceOriginalIntent(input: {
   }
 
   return {
-    text: formatCommandErrorMessage(normalizedError.code, normalizedError.message),
+    text: resolveRoomCommandErrorText(normalizedError.code, normalizedError.message),
     blocks: [createHelpButtonActionsBlock()]
   };
 }

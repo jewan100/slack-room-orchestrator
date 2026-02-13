@@ -152,7 +152,7 @@ describe("createRoomCommandHandler", () => {
     });
   });
 
-  it("throws when stop thread notice fails", async () => {
+  it("does not throw when stop thread notice fails", async () => {
     const stopService = {
       execute: vi.fn(async () => {
         return {
@@ -193,21 +193,19 @@ describe("createRoomCommandHandler", () => {
       logger: createLogger("error")
     });
 
-    await expect(
-      handler({
-        requestId: "request-3",
-        startedAt: Date.now(),
-        command: {
-          text: "stop",
-          userId: "U01",
-          teamId: "T01",
-          channelId: "C01"
-        },
-        client: createSlackClientMock()
-      })
-    ).rejects.toMatchObject({
-      code: ROOM_ERROR_CODES.ROOM_INTERNAL_ERROR
+    await handler({
+      requestId: "request-3",
+      startedAt: Date.now(),
+      command: {
+        text: "stop",
+        userId: "U01",
+        teamId: "T01",
+        channelId: "C01"
+      },
+      client: createSlackClientMock()
     });
+
+    expect(stopService.execute).toHaveBeenCalledTimes(1);
   });
 
   it("routes /room launch to launch service", async () => {

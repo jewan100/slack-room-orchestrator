@@ -4,6 +4,7 @@ import { ROOM_ERROR_CODES } from "../../../shared/errorCodes";
 import type { Logger } from "../../../shared/logger";
 import { RoomCommandError, normalizeRoomCommandError } from "../../../shared/roomCommandError";
 import type { ParsedRoomCommand, RoomCommandRequest, SlackChatClient, SlackThreadPort } from "../../../shared/types";
+import { extractErrorMessage } from "./slackAdapterUtils";
 export interface StartRoomSessionServicePort {
   execute(
     input: {
@@ -88,13 +89,24 @@ async function handleStopCommand(input: {
     startChannelId: input.dependencies.startChannelId
   });
 
-  // stop 성공은 스레드에 "종료" 안내를 남기는 것이 핵심 UX다.
-  // 이 전송이 실패하면 사용자는 성공 여부를 확인할 수 없으므로 예외를 올린다.
-  await input.slackThreadPort.postMessageInThread({
-    channelId: input.dependencies.startChannelId,
-    threadTs: result.session.startThreadTs,
-    text: ROOM_COMMAND_MESSAGES.stopSuccessText
-  });
+  // stop 성공 안내는 best-effort로 스레드에 남긴다.
+  // 실패해도 세션 종료 상태(DECIDED) 자체를 뒤집지는 않으므로 예외를 전파하지 않는다.
+  try {
+    await input.slackThreadPort.postMessageInThread({
+      channelId: input.dependencies.startChannelId,
+      threadTs: result.session.startThreadTs,
+      text: ROOM_COMMAND_MESSAGES.stopSuccessText
+    });
+  } catch (error) {
+    input.dependencies.logger.warn(ROOM_LOG_EVENT_NAMES.roomCommandThreadNoticeFailed, {
+      requestId: input.request.requestId,
+      sessionId: result.session.id,
+      channelId: input.dependencies.startChannelId,
+      threadTs: result.session.startThreadTs,
+      command: input.request.command.text,
+      errorMessage: extractErrorMessage(error)
+    });
+  }
 }
 function logCommandPhaseCompletion(input: {
   dependencies: RoomCommandHandlerDependencies;
@@ -164,7 +176,7 @@ async function executeStopCommandPhase(input: {
       await handleStopCommand({
         dependencies: input.dependencies,
         request: input.request,
-        slackThreadPort: input.slackThreadPort,
+        slackThreadPort: input.slackThreadPort
       });
     }
   });
@@ -184,7 +196,7 @@ async function executeLaunchCommandPhase(input: {
       await handleLaunchCommand({
         dependencies: input.dependencies,
         request: input.request,
-        slackThreadPort: input.slackThreadPort,
+        slackThreadPort: input.slackThreadPort
       });
     }
   });
