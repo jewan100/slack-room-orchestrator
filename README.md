@@ -78,12 +78,16 @@
 - `npm test`
 
 ## 필독 문서 우선순위
-1. `JEWAN_DEV_CONSTITUTION.md`
-2. `STANDARDS.md`
-3. `SLACK_COMMAND_ENGINEERING_STANDARDS.md`
-4. `AGENTS.md`
-5. `docs/reviewer/PR_REVIEW_POLICY.md`
-6. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md`
-7. `.github/copilot-instructions.md`
-8. `.github/codex-instructions.md`
-9. `.github/PULL_REQUEST_TEMPLATE.md`
+`AGENTS.md`의 문서 우선순위와 동일하게 유지한다.
+
+1. `AGENTS.md` (AI 워커 작업 계약, 최상위 작업 지침)
+2. `JEWAN_DEV_CONSTITUTION.md` (전역 개발 헌법, 최상위 원칙)
+3. `STANDARDS.md` (레포 공통 구현/프로세스 표준)
+4. `SLACK_COMMAND_ENGINEERING_STANDARDS.md` (도메인 특화 규칙)
+5. `README.md` (현재 레포 운영 맥락/확장 방향)
+6. `docs/decision/DECISION_LOG.md` (현재 유효 기준선)
+7. `docs/reviewer/PR_REVIEW_POLICY.md` (리뷰 절차)
+8. `docs/reviewer/CODEX_FINAL_REVIEW_CHECKLIST.md` (최종 점검 항목)
+9. `.github/copilot-instructions.md` (Copilot 작업 가이드)
+10. `.github/codex-instructions.md` (Codex 최종 게이트 기준)
+11. `.github/PULL_REQUEST_TEMPLATE.md` (PR 작성 형식)
