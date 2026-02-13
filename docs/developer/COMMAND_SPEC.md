@@ -31,7 +31,7 @@
 ## 커맨드 모델
 - Slack 등록 커맨드: `/room` (단일)
 - 파싱 규칙: `command.text`의 첫 토큰을 서브커맨드로 해석
-- 지원(1차): `start`, `summary`, `launch`
+- 지원(1차): `start`, `launch`, `stop`, `help`
 - 확장(2차): `status`, `decide`
 
 ## 범용 확장 관점
@@ -43,17 +43,23 @@
 - `IDLE`: 활성 세션 없음
 - `PREPARED`: `/room start` 완료
 - `RUNNING`: `/room launch` 완료
-- `DECIDED`: `/room decide` 완료(2차)
+- `DECIDED`: `/room stop` 또는 `/room decide` 완료
 
 ## 공통 규칙
-- `ack()`는 즉시 호출한다.
-- 응답은 기본적으로 "현재 상태 + 다음 액션"을 포함한다.
+- Slack Slash Command는 **3초 내 ack**가 없으면 Slack이 자동으로 실패 처리할 수 있다.
+- `/room`은 어떤 입력이든 **ack을 최우선**으로 처리한다.
+- Slash 응답은 "진행 UI"다. 실제 결과는 **스레드에만** 남긴다.
+- Slash 응답 UX는 **1회 호출당 ephemeral 1개**만 남긴다.
+- fast-path: `invalid/help`는 **ack 1회로 최종 안내**를 반환하고 종료한다.
+- 정상 명령(`start/launch/stop`): **ack 1회로 "처리 중"**을 표시하고 post-ack에서 실행한다.
+- 성공 시: `delete_original`을 **best-effort**로 시도한다(실패해도 추가 보정 메시지는 보내지 않는다).
+- 실패 시: `replace_original`로 "처리 중"을 **에러로 교체**한다.
 - 에러는 공통 포맷과 에러코드를 사용한다.
 - 영속 저장소는 SQLite를 사용한다.
 
 ---
 
-## 1) `/room start <topic>` (구현 완료)
+## 1) `/room start` (구현 완료)
 
 ### 목적
 회의 준비 세션을 만들고 브리핑 템플릿을 저장한다.
@@ -69,48 +75,18 @@
 3. 세션 상태를 `PREPARED`로 저장
 4. 브리핑 기본 템플릿 저장
 5. planning watch target ON 등록 + `ROOM_MODE_ON` outbox enqueue
+6. 택배가 스레드 첫 메시지에서 회의 목표/제약/완료기준을 질문
 
 ### 결과
 - 상태: `PREPARED`
-- 다음 액션: `/room summary` 또는 `/room launch`
+- 다음 액션: `/room launch`
 
 ### 실패
-- `topic` 누락
 - 활성 세션 이미 존재
 
 ---
 
-## 2) `/room summary [--brief|--full]` (구현 완료)
-
-### 목적
-현재 세션의 브리핑/라운드 정보를 요약한다.
-
-### 수행 주체
-- 입력: 명령 요청자(형)
-- 실행 조율: 택배
-- 보조 실행: 소포 결과(저장된 라운드 데이터)가 있으면 집계 반영
-
-### 옵션
-- `--brief` (기본값)
-- `--full`
-
-### 처리
-1. 활성 세션 조회
-2. 브리핑 정보 조회
-3. 최신 라운드 조회(있으면 포함)
-4. 요약 텍스트 반환
-
-### 결과
-- `PREPARED` 상태에서는 `/room launch`를 다음 액션으로 안내
-- `RUNNING` 상태에서는 `/room status`(2차)를 안내
-
-### 실패
-- 활성 세션 없음
-- 옵션 파싱 오류
-
----
-
-## 3) `/room launch` (구현 완료)
+## 2) `/room launch` (구현 완료)
 
 ### 목적
 실행 스레드를 열고 워커 라운드(스텁)를 시작한다.
@@ -138,12 +114,49 @@
 
 ---
 
-## 4) `/room status` (2차 예정)
+## 3) `/room stop` (구현 완료)
+- 입력: 명령 요청자(형)
+- 실행 조율: 택배
+- 역할: 현재 활성 세션을 강제 종료하고 planning 감시를 즉시 중단
+
+### 처리
+1. 시작 채널 기준 활성 세션 조회
+2. 세션 상태를 `DECIDED`로 전이(`decided_option=NULL`)
+3. planning watch target OFF 전환
+4. `ROOM_MODE_OFF(offReason=MANUAL)` outbox enqueue
+
+### 결과
+- 상태: `DECIDED`
+- 다음 액션: `/room start`
+
+### 실패
+- 활성 세션 없음
+
+---
+
+## 4) `/room help` (구현 완료)
+- 입력: 명령 요청자(형)
+- 실행 조율: 택배
+- 역할: 지원되는 `/room` 명령과 옵션을 즉시 안내
+
+### 처리
+1. 서비스/DB 접근 없이 사용법 본문을 즉시 반환
+2. invalid 응답의 버튼과 동일한 도움말 내용을 제공
+
+### 결과
+- `/room start`
+- `/room launch`
+- `/room stop`
+- `/room help`
+
+---
+
+## 5) `/room status` (2차 예정)
 - 입력: 명령 요청자(형)
 - 실행 조율: 택배
 - 역할: 진행 상태/라운드/후보안/미해결 이슈 조회
 
-## 5) `/room decide <A|B|C>` (2차 예정)
+## 6) `/room decide <A|B|C>` (2차 예정)
 - 입력: 최종 결정자(형)
 - 실행 조율: 택배
 - 역할: 최종 선택 저장 + 상태 `DECIDED` 전환 + 후속 액션 생성
@@ -151,7 +164,6 @@
 ---
 
 ## 에러 코드
-- `ROOM_MISSING_TOPIC`
 - `ROOM_NO_ACTIVE_SESSION`
 - `ROOM_ALREADY_RUNNING`
 - `ROOM_INVALID_STATE_TRANSITION`
@@ -163,28 +175,32 @@
 ## OpenClaw 연동 v1 (구현 완료)
 
 ### 실시간 라우팅 계약 (v1 우선순위)
-- Relay는 `ROOM_START_CHANNEL_ID` 채널을 OpenClaw 회의 세션으로 고정 매핑한다.
-- thread별 동적 매핑 제어(HTTP/NDJSON bind/unbind)는 v1 범위에서 제외한다.
-- OpenClaw는 메시지 수신 시 `room_watch_targets`를 조회해 아래 조건을 동시에 만족할 때만 회의 모드로 처리한다.
+- Slack 메시지 입력은 `slack-room-orchestrator`가 소유한다.
+- `message` 이벤트가 들어오면 `room_watch_targets`를 조회해 아래 조건을 동시에 만족할 때만 실시간 답변을 생성한다.
   - `status='ON'`
   - `channel_id` 일치
   - `thread_ts` 일치
+- 실시간 답변은 OpenClaw OpenAI 호환 HTTP API(`POST /v1/chat/completions`)로 생성한다.
+- OpenClaw 세션 키는 `x-openclaw-session-key=room:{sessionId}` 규칙으로 고정한다.
+- 응답 모드는 non-stream 단일 완료 응답이다.
 - 시작 채널 기준 활성 planning room은 1개만 허용한다.
+- launch/TTL 레이스 방지를 위해 게시 직전에 ON 상태를 재검증한다.
+- OpenClaw 호출 실패 시 thread에 안내를 1회 게시하고, 비동기 재시도를 수행한다.
 
 ### 이벤트 프로토콜
-- 타입: `ROOM_MODE_ON`, `ROOM_MODE_OFF`, `ROOM_SUMMARY_TRIGGER`, `ROOM_QUESTION_TRIGGER`
+- 타입: `ROOM_MODE_ON`, `ROOM_MODE_OFF`, `ROOM_QUESTION_TRIGGER`
 - 공통 필드: `eventId`, `eventType`, `sessionId`, `channelId`, `threadTs`, `topic`, `state`, `occurredAt`, `version`
-- OFF 전용 필드: `offReason` (`LAUNCH` | `TTL`)
+- OFF 전용 필드: `offReason` (`LAUNCH` | `TTL` | `MANUAL`)
 - 보안 규칙: 이벤트/DB/NDJSON에는 메시지 본문 전문을 저장하지 않는다.
 
 ### 수명 규칙
 - ON 시점: `/room start` 성공 직후
 - OFF 시점:
   - `/room launch` 성공 직후 `offReason=LAUNCH`
-  - `ROOM_MODE_TTL_MINUTES` 경과 시 `offReason=TTL`
+  - `/room stop` 성공 직후 `offReason=MANUAL`
+  - planning 스레드에 `ROOM_MODE_TTL_MINUTES` 동안 메시지가 없으면 watch target OFF + 세션 `DECIDED` 종료 + 스레드 종료 안내를 수행
 
 ### 자동 트리거 규칙
-- summary: 감시 스레드 메시지 누적이 `ROOM_AUTO_SUMMARY_MESSAGE_THRESHOLD`를 충족할 때 enqueue
 - question: `ROOM_AUTO_QUESTION_INTERVAL_MINUTES` 주기로 due 대상 enqueue
 
 ### 전달/복구
