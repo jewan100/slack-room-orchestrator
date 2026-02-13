@@ -95,10 +95,6 @@
   - 필요한 검증(`lint`/`typecheck`/`test` 또는 대체 근거)을 제시하지 못하면 “완료”로 간주하지 않는다.
   - 문서/결정/후속 TODO까지 연결되어 추적 가능해야 한다.
 
-참고:
-- Karpathy 원문: https://x.com/karpathy/status/2015883857489522876
-- 참고 스킬: https://github.com/forrestchang/andrej-karpathy-skills/blob/main/skills/karpathy-guidelines/SKILL.md
-
 ---
 
 ## 3) PR 작성 규칙 (모든 워커 공통)

@@ -193,6 +193,3 @@
   - 이번 PR에서 `AGENTS.md`에 4원칙을 명문화하고, `README.md`/`docs/developer/STANDARDS.md`에 참조를 연결한다.
   - 리뷰 체크리스트 반영은 별도 PR에서 검토한다.
 - 상태: 유효
-- 참고:
-  - Karpathy 원문: https://x.com/karpathy/status/2015883857489522876
-  - 참고 스킬: https://github.com/forrestchang/andrej-karpathy-skills/blob/main/skills/karpathy-guidelines/SKILL.md
